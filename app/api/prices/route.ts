@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { TRACKED_STOCKS } from "@/lib/stocks";
-import { fetchYahooQuotes } from "@/lib/yahoo";
+import { fetchAllQuotes } from "@/lib/yahoo";
 import type { StockQuote } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export async function GET() {
   try {
     const open = isMarketOpen();
     const symbols = TRACKED_STOCKS.map(s => s.symbol);
-    const rawQuotes = await fetchYahooQuotes(symbols);
+    const rawQuotes = await fetchAllQuotes(symbols);
 
     const quotes: StockQuote[] = rawQuotes.map(q => {
       const stock = TRACKED_STOCKS.find(s => s.symbol === q.symbol);

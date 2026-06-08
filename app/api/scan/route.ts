@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { TRACKED_STOCKS, TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
-import { fetchYahooQuotes } from "@/lib/yahoo";
+import { fetchAllQuotes } from "@/lib/yahoo";
 import { gatherIntelligence } from "@/lib/intelligence";
 import type { StockQuote, AIAnalysis } from "@/lib/types";
 import { nanoid } from "nanoid";
@@ -91,7 +91,7 @@ export async function GET() {
 
     // 1. Fetch ALL 25 stock prices in one batch call (not 25 individual calls)
     const symbols = TRACKED_STOCKS.map(s => s.symbol);
-    const rawQuotes = await fetchYahooQuotes(symbols);
+    const rawQuotes = await fetchAllQuotes(symbols);
 
     const quotes: StockQuote[] = rawQuotes.map(q => {
       const stock = TRACKED_STOCKS.find(s => s.symbol === q.symbol);
