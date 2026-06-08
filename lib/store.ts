@@ -70,9 +70,9 @@ export const useStore = create<AppState>()(
       },
 
       runScan: async () => {
-        const { scanning, addLog, tradedToday, positions } = get();
-        if (scanning) return;
+        if (get().scanning) return;
         set({ scanning: true });
+        const { addLog } = get();
 
         try {
           const res = await fetch("/api/scan", { cache: "no-store" });
@@ -96,54 +96,55 @@ export const useStore = create<AppState>()(
           }
 
           // ── MECHANICAL TRADES — no AI, instant execution ──
-          for (const symbol of triggered) {
-            // Skip if already traded this session
-            if (tradedToday.includes(symbol)) continue;
-            // Skip if already have open position
-            if (positions.some(p => p.symbol === symbol && p.status === "open")) continue;
+          try {
+            for (const symbol of triggered) {
+              const currentState = get();
+              if (currentState.tradedToday.includes(symbol)) continue;
+              if (currentState.positions.some(p => p.symbol === symbol && p.status === "open")) continue;
 
-            const quote = quotes.find(q => q.symbol === symbol);
-            const stock = TRACKED_STOCKS.find(s => s.symbol === symbol);
-            if (!quote || !stock) continue;
+              const quote = quotes.find(q => q.symbol === symbol);
+              const stock = TRACKED_STOCKS.find(s => s.symbol === symbol);
+              if (!quote || !stock) continue;
 
-            // FADE THE MOVE: up → SHORT, down → LONG
-            const direction = quote.changePercent > 0 ? "SHORT" as const : "LONG" as const;
-            const entryPrice = direction === "LONG"
-              ? quote.price + stock.igSpread / 2
-              : quote.price - stock.igSpread / 2;
+              const direction = quote.changePercent > 0 ? "SHORT" as const : "LONG" as const;
+              const entryPrice = direction === "LONG"
+                ? quote.price + stock.igSpread / 2
+                : quote.price - stock.igSpread / 2;
 
-            const pos: Position = {
-              id: uid(),
-              symbol,
-              name: stock.name,
-              direction,
-              entryPrice,
-              currentPrice: quote.price,
-              stakePerPoint: STAKE_PER_POINT,
-              pnl: 0,
-              pnlPercent: 0,
-              status: "open",
-              entryTime: new Date().toISOString(),
-              aiAnalysisId: "",
-              aiReasoning: `Mechanical fade: ${stock.name} moved ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% → ${direction}. Target +1%, stop -2%.`,
-              igSpread: stock.igSpread,
-              priceHistory: [{ time: new Date().toISOString(), price: quote.price, pnl: 0 }],
-              peakPnl: 0,
-              troughPnl: 0,
-            };
+              const pos: Position = {
+                id: uid(),
+                symbol,
+                name: stock.name,
+                direction,
+                entryPrice,
+                currentPrice: quote.price,
+                stakePerPoint: STAKE_PER_POINT,
+                pnl: 0,
+                pnlPercent: 0,
+                status: "open",
+                entryTime: new Date().toISOString(),
+                aiAnalysisId: "",
+                aiReasoning: `Mechanical fade: ${stock.name} moved ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% → ${direction}. Target +1%, stop -2%.`,
+                igSpread: stock.igSpread,
+                priceHistory: [{ time: new Date().toISOString(), price: quote.price, pnl: 0 }],
+                peakPnl: 0,
+                troughPnl: 0,
+              };
 
-            set(s => ({
-              positions: [pos, ...s.positions],
-              portfolio: computePortfolio([pos, ...s.positions]),
-              tradedToday: [...s.tradedToday, symbol],
-            }));
+              set(s => ({
+                positions: [pos, ...s.positions],
+                portfolio: computePortfolio([pos, ...s.positions]),
+                tradedToday: [...s.tradedToday, symbol],
+              }));
 
-            const arrow = direction === "LONG" ? "📈" : "📉";
-            addLog("trade_open", `${arrow} ${direction} ${symbol} at $${quote.price.toFixed(2)} — fading ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% move — £${STAKE_PER_POINT}/pt`);
+              addLog("trade_open", `${direction === "LONG" ? "📈" : "📉"} ${direction} ${symbol} at $${quote.price.toFixed(2)} — fading ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% move`);
+            }
+          } catch (tradeErr) {
+            addLog("error", `Trade execution error: ${tradeErr instanceof Error ? tradeErr.message : "unknown"}`);
           }
 
           // Tick open positions with new prices
-          get().tickPositions();
+          try { get().tickPositions(); } catch { /* non-critical */ }
 
         } catch (err) {
           get().addLog("error", `Scan failed: ${err instanceof Error ? err.message : "unknown"}`);
