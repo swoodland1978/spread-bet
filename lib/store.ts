@@ -69,7 +69,7 @@ export const useStore = create<AppState>()(
         addLog("scan", "Scanning all 25 stocks…");
 
         try {
-          const res = await fetch("/api/scan");
+          const res = await fetch("/api/scan", { cache: "no-store" });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
 
@@ -197,7 +197,7 @@ export const useStore = create<AppState>()(
       },
     }),
     {
-      name: "spreadbet-v2",
+      name: "spreadbet-v3",
       partialize: (s) => ({
         positions: s.positions,
         analyses: s.analyses,
