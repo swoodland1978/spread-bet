@@ -1,6 +1,6 @@
 import type { Position, Portfolio, AIAnalysis } from "./types";
 import { TAKE_PROFIT_PCT, STOP_LOSS_PCT, STARTING_BANKROLL } from "./stocks";
-import { nanoid } from "nanoid";
+function nanoid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
 export function calcPnl(pos: Position, currentPrice: number): { pnl: number; pnlPercent: number } {
   const points = pos.direction === "LONG"

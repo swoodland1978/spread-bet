@@ -4,7 +4,7 @@ import { TRACKED_STOCKS, TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/l
 import { fetchAllQuotes } from "@/lib/yahoo";
 import { gatherIntelligence } from "@/lib/intelligence";
 import type { StockQuote, AIAnalysis } from "@/lib/types";
-import { nanoid } from "nanoid";
+function nanoid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;

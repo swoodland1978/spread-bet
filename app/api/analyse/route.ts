@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import type { AIAnalysis, NewsItem } from "@/lib/types";
 import { STAKE_PER_POINT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
-import { nanoid } from "nanoid";
+function nanoid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
 export const dynamic = "force-dynamic";
 
