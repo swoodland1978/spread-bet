@@ -6,7 +6,7 @@ import type { LogEntry } from "@/lib/store";
 import StockCard from "@/components/dashboard/StockCard";
 import PortfolioBar from "@/components/dashboard/PortfolioBar";
 import PositionsList from "@/components/dashboard/PositionsList";
-import AnalysisFeed from "@/components/dashboard/AnalysisFeed";
+import ReviewsFeed from "@/components/dashboard/ReviewsFeed";
 
 const SCAN_INTERVAL_MS = 90_000; // scan every 90 seconds (respects Finnhub rate limit)
 
@@ -19,7 +19,8 @@ export default function Dashboard() {
   const log = useStore(s => s.log);
   const resetSimulation = useStore(s => s.resetSimulation);
   const openCount = useStore(s => s.positions.filter(p => p.status === "open").length);
-  const [tab, setTab] = useState<"live" | "positions" | "analysis">("live");
+  const [tab, setTab] = useState<"live" | "positions" | "reviews">("live");
+  const reviewCount = useStore(s => s.reviews.length);
 
   // Auto-scan on mount + interval
   useEffect(() => {
@@ -63,7 +64,7 @@ export default function Dashboard() {
             {([
               { key: "live" as const, label: "Live Feed" },
               { key: "positions" as const, label: `Positions (${openCount})` },
-              { key: "analysis" as const, label: "AI Decisions" },
+              { key: "reviews" as const, label: `Trade Reviews (${reviewCount})` },
             ]).map(t => (
               <button key={t.key} onClick={() => setTab(t.key)}
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === t.key ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"}`}>
@@ -117,7 +118,7 @@ export default function Dashboard() {
         )}
 
         {tab === "positions" && <PositionsList />}
-        {tab === "analysis" && <AnalysisFeed />}
+        {tab === "reviews" && <ReviewsFeed />}
       </main>
     </div>
   );
@@ -127,7 +128,7 @@ function LogLine({ entry }: { entry: LogEntry }) {
   const colorMap: Record<LogEntry["type"], string> = {
     scan: "text-white/30",
     trigger: "text-yellow-400",
-    analysis: "text-blue-400",
+    review: "text-blue-400",
     trade_open: "text-emerald-400",
     trade_close: "text-orange-400",
     info: "text-white/40",

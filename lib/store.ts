@@ -2,27 +2,27 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { StockQuote, Position, AIAnalysis, Portfolio, CloseReason } from "./types";
-import { calcPnl, shouldClose, openPosition, computePortfolio } from "./portfolio";
-import { TRACKED_STOCKS, TRIGGER_PCT } from "./stocks";
+import type { StockQuote, Position, Portfolio, CloseReason, TradeReview } from "./types";
+import { calcPnl, shouldClose, computePortfolio } from "./portfolio";
+import { TRACKED_STOCKS, TRIGGER_PCT, STAKE_PER_POINT } from "./stocks";
 
 export interface LogEntry {
   id: string;
   time: string;
-  type: "scan" | "trigger" | "analysis" | "trade_open" | "trade_close" | "info" | "error";
+  type: "scan" | "trigger" | "trade_open" | "trade_close" | "review" | "info" | "error";
   message: string;
 }
 
 interface AppState {
   quotes: StockQuote[];
   positions: Position[];
-  analyses: AIAnalysis[];
+  reviews: TradeReview[];
   portfolio: Portfolio;
   log: LogEntry[];
   lastScanAt: string | null;
   marketOpen: boolean;
   scanning: boolean;
-  alreadyAnalysed: string[]; // symbols analysed this session to avoid repeats
+  tradedToday: string[]; // symbols already traded this session
 
   // Actions
   runScan: () => Promise<void>;
@@ -37,6 +37,8 @@ const INITIAL_PORTFOLIO: Portfolio = {
   totalTrades: 0, winningTrades: 0, losingTrades: 0,
 };
 
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+
 let logCounter = 0;
 
 export const useStore = create<AppState>()(
@@ -44,13 +46,13 @@ export const useStore = create<AppState>()(
     (set, get) => ({
       quotes: [],
       positions: [],
-      analyses: [],
+      reviews: [],
       portfolio: INITIAL_PORTFOLIO,
       log: [],
       lastScanAt: null,
       marketOpen: false,
       scanning: false,
-      alreadyAnalysed: [],
+      tradedToday: [],
 
       addLog: (type, message) => {
         const entry: LogEntry = {
@@ -63,10 +65,9 @@ export const useStore = create<AppState>()(
       },
 
       runScan: async () => {
-        const { scanning, addLog, alreadyAnalysed, positions } = get();
+        const { scanning, addLog, tradedToday, positions } = get();
         if (scanning) return;
         set({ scanning: true });
-        addLog("scan", "Scanning all 25 stocks…");
 
         try {
           const res = await fetch("/api/scan", { cache: "no-store" });
@@ -75,64 +76,72 @@ export const useStore = create<AppState>()(
 
           const newQuotes: StockQuote[] = data.quotes ?? [];
           const marketOpen: boolean = data.marketOpen ?? false;
-          const analyses: AIAnalysis[] = data.analyses ?? [];
           const triggered: string[] = data.triggered ?? [];
 
-          // Keep last known quotes if this scan returned empty (rate limit etc)
+          // Keep last known quotes if this scan returned empty
           const quotes = newQuotes.length > 0 ? newQuotes : get().quotes;
           set({ quotes, marketOpen, lastScanAt: data.scannedAt });
-          addLog("scan", `${quotes.length} stocks fetched. Market ${marketOpen ? "OPEN" : "CLOSED"}.`);
+
+          if (newQuotes.length > 0) {
+            addLog("scan", `${newQuotes.length} stocks fetched. Market ${marketOpen ? "OPEN" : "CLOSED"}.`);
+          }
 
           if (triggered.length > 0) {
             addLog("trigger", `⚡ ${triggered.length} stock${triggered.length !== 1 ? "s" : ""} moved >${TRIGGER_PCT}%: ${triggered.join(", ")}`);
           }
 
-          // Process AI analyses — open positions automatically
-          for (const analysis of analyses) {
-            // Skip if already analysed this session
-            if (alreadyAnalysed.includes(analysis.symbol)) {
-              addLog("info", `${analysis.symbol} already analysed today — skipping.`);
-              continue;
-            }
+          // ── MECHANICAL TRADES — no AI, instant execution ──
+          for (const symbol of triggered) {
+            // Skip if already traded this session
+            if (tradedToday.includes(symbol)) continue;
+            // Skip if already have open position
+            if (positions.some(p => p.symbol === symbol && p.status === "open")) continue;
 
-            // Skip if we already have an open position on this stock
-            const hasOpen = positions.some(p => p.symbol === analysis.symbol && p.status === "open");
-            if (hasOpen) {
-              addLog("info", `${analysis.symbol} already has an open position — skipping.`);
-              continue;
-            }
+            const quote = quotes.find(q => q.symbol === symbol);
+            const stock = TRACKED_STOCKS.find(s => s.symbol === symbol);
+            if (!quote || !stock) continue;
+
+            // FADE THE MOVE: up → SHORT, down → LONG
+            const direction = quote.changePercent > 0 ? "SHORT" as const : "LONG" as const;
+            const entryPrice = direction === "LONG"
+              ? quote.price + stock.igSpread / 2
+              : quote.price - stock.igSpread / 2;
+
+            const pos: Position = {
+              id: uid(),
+              symbol,
+              name: stock.name,
+              direction,
+              entryPrice,
+              currentPrice: quote.price,
+              stakePerPoint: STAKE_PER_POINT,
+              pnl: 0,
+              pnlPercent: 0,
+              status: "open",
+              entryTime: new Date().toISOString(),
+              aiAnalysisId: "",
+              aiReasoning: `Mechanical fade: ${stock.name} moved ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% → ${direction}. Target +1%, stop -2%.`,
+              igSpread: stock.igSpread,
+              priceHistory: [{ time: new Date().toISOString(), price: quote.price, pnl: 0 }],
+              peakPnl: 0,
+              troughPnl: 0,
+            };
 
             set(s => ({
-              analyses: [analysis, ...s.analyses].slice(0, 100),
-              alreadyAnalysed: [...s.alreadyAnalysed, analysis.symbol],
+              positions: [pos, ...s.positions],
+              portfolio: computePortfolio([pos, ...s.positions]),
+              tradedToday: [...s.tradedToday, symbol],
             }));
 
-            if (analysis.direction === "AVOID") {
-              addLog("analysis", `🤖 ${analysis.symbol}: AVOID (${analysis.confidence}% confidence) — ${analysis.reasoning}`);
-            } else {
-              addLog("analysis", `🤖 ${analysis.symbol}: ${analysis.direction} (${analysis.confidence}%) — ${analysis.reasoning}`);
-
-              // Auto-open position
-              const stock = TRACKED_STOCKS.find(s => s.symbol === analysis.symbol);
-              const quote = quotes.find(q => q.symbol === analysis.symbol);
-              if (stock && quote) {
-                const pos = openPosition(analysis, quote.price, stock.igSpread);
-                if (pos) {
-                  set(s => ({
-                    positions: [pos, ...s.positions],
-                    portfolio: computePortfolio([pos, ...s.positions]),
-                  }));
-                  addLog("trade_open", `📈 OPENED ${analysis.direction} on ${analysis.symbol} at $${quote.price.toFixed(2)} — £${analysis.stakePerPoint}/pt`);
-                }
-              }
-            }
+            const arrow = direction === "LONG" ? "📈" : "📉";
+            addLog("trade_open", `${arrow} ${direction} ${symbol} at $${quote.price.toFixed(2)} — fading ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% move — £${STAKE_PER_POINT}/pt`);
           }
 
           // Tick open positions with new prices
           get().tickPositions();
 
         } catch (err) {
-          get().addLog("error", `Scan failed: ${err instanceof Error ? err.message : "unknown error"}`);
+          get().addLog("error", `Scan failed: ${err instanceof Error ? err.message : "unknown"}`);
         } finally {
           set({ scanning: false });
         }
@@ -152,13 +161,34 @@ export const useStore = create<AppState>()(
 
           // Record price snapshot
           const snapshot = { time: new Date().toISOString(), price: q.price, pnl };
-          const history = [...(pos.priceHistory ?? []), snapshot].slice(-120); // keep last 2 hours of 60s ticks
+          const history = [...(pos.priceHistory ?? []), snapshot].slice(-120);
           const peakPnl = Math.max(pos.peakPnl ?? 0, pnl);
           const troughPnl = Math.min(pos.troughPnl ?? 0, pnl);
 
           if (closeReason) {
-            const label = closeReason === "take_profit" ? "✅ TAKE PROFIT" : "🛑 STOP LOSS";
-            addLog("trade_close", `${label} ${pos.symbol} ${pos.direction} — P&L: ${pnl >= 0 ? "+" : ""}£${pnl.toFixed(2)} (${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(1)}%) | Peak: £${peakPnl.toFixed(2)} Trough: £${troughPnl.toFixed(2)}`);
+            const isWin = closeReason === "take_profit";
+            const label = isWin ? "✅ TAKE PROFIT +1%" : "🛑 STOP LOSS -2%";
+            const holdMins = Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000);
+            addLog("trade_close", `${label} ${pos.symbol} ${pos.direction} — P&L: ${pnl >= 0 ? "+" : ""}£${pnl.toFixed(2)} — held ${holdMins}m`);
+
+            // Fire post-trade AI review in background
+            requestTradeReview({
+              positionId: pos.id,
+              symbol: pos.symbol,
+              name: pos.name,
+              direction: pos.direction,
+              outcome: isWin ? "win" : "loss",
+              pnl,
+              pnlPercent,
+              entryPrice: pos.entryPrice,
+              exitPrice: q.price,
+              holdingTimeMinutes: holdMins,
+              triggerChangePercent: parseFloat(pos.aiReasoning?.match(/[+-]?\d+\.?\d*%/)?.[0] ?? "0"),
+              closeReason,
+              peakPnl,
+              troughPnl,
+            });
+
             return {
               ...pos, currentPrice: q.price, pnl, pnlPercent,
               status: "closed" as const, exitPrice: q.price,
@@ -175,12 +205,10 @@ export const useStore = create<AppState>()(
       },
 
       closePosition: (id, price, reason) => {
-        const { addLog } = get();
         set(s => {
           const updated = s.positions.map(p => {
             if (p.id !== id || p.status === "closed") return p;
             const { pnl, pnlPercent } = calcPnl(p, price);
-            addLog("trade_close", `Manual close ${p.symbol} ${p.direction} — P&L: ${pnl >= 0 ? "+" : ""}£${pnl.toFixed(2)}`);
             return {
               ...p, status: "closed" as const, exitPrice: price,
               exitTime: new Date().toISOString(), closeReason: reason,
@@ -193,20 +221,40 @@ export const useStore = create<AppState>()(
 
       resetSimulation: () => {
         set({
-          positions: [], analyses: [], portfolio: INITIAL_PORTFOLIO,
-          log: [], alreadyAnalysed: [],
+          positions: [], reviews: [], portfolio: INITIAL_PORTFOLIO,
+          log: [], tradedToday: [],
         });
       },
     }),
     {
-      name: "spreadbet-v3",
+      name: "spreadbet-v4",
       partialize: (s) => ({
         quotes: s.quotes,
         positions: s.positions,
-        analyses: s.analyses,
+        reviews: s.reviews,
         portfolio: s.portfolio,
-        alreadyAnalysed: s.alreadyAnalysed,
+        tradedToday: s.tradedToday,
       }),
     }
   )
 );
+
+/** Fire-and-forget: send closed trade to AI for post-trade review */
+async function requestTradeReview(trade: Record<string, unknown>) {
+  try {
+    const res = await fetch("/api/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(trade),
+    });
+    if (!res.ok) return;
+    const review = await res.json();
+    if (review.review) {
+      useStore.getState().addLog("review", `🎓 ${trade.symbol} review: ${review.review}`);
+      useStore.getState().addLog("review", `💡 ${trade.symbol} lesson: ${review.lessons}`);
+      useStore.setState(s => ({ reviews: [review, ...s.reviews].slice(0, 50) }));
+    }
+  } catch {
+    // Non-critical — don't block anything
+  }
+}

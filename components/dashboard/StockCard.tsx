@@ -6,7 +6,7 @@ import { TRIGGER_PCT } from "@/lib/stocks";
 
 export default function StockCard({ quote }: { quote: StockQuote }) {
   const openPositions = useStore(s => s.positions.filter(p => p.symbol === quote.symbol && p.status === "open"));
-  const latestAnalysis = useStore(s => s.analyses.find(a => a.symbol === quote.symbol));
+  const traded = useStore(s => s.tradedToday.includes(quote.symbol));
   const triggered = Math.abs(quote.changePercent) >= TRIGGER_PCT;
   const up = quote.changePercent >= 0;
 
@@ -27,7 +27,7 @@ export default function StockCard({ quote }: { quote: StockQuote }) {
         </div>
       </div>
 
-      {/* Open position indicator */}
+      {/* Open position P&L */}
       {openPositions.length > 0 && (
         <div className="flex gap-1 flex-wrap">
           {openPositions.map(p => (
@@ -38,21 +38,17 @@ export default function StockCard({ quote }: { quote: StockQuote }) {
         </div>
       )}
 
-      {/* AI decision badge */}
-      {latestAnalysis && (
-        <div className={`text-[10px] px-1.5 py-0.5 rounded font-semibold w-fit ${
-          latestAnalysis.direction === "LONG" ? "bg-emerald-500/10 text-emerald-400/70" :
-          latestAnalysis.direction === "SHORT" ? "bg-red-500/10 text-red-400/70" :
-          "bg-white/5 text-white/30"
-        }`}>
-          AI: {latestAnalysis.direction} {latestAnalysis.confidence}%
+      {/* Triggered — will auto-trade */}
+      {triggered && !traded && openPositions.length === 0 && (
+        <div className="text-[10px] text-yellow-400/70 font-semibold">
+          ⚡ {Math.abs(quote.changePercent).toFixed(1)}% → auto {up ? "SHORT" : "LONG"}
         </div>
       )}
 
-      {/* Triggered indicator */}
-      {triggered && !latestAnalysis && (
-        <div className="text-[10px] text-yellow-400/70 font-semibold">
-          ⚡ {Math.abs(quote.changePercent).toFixed(1)}% — awaiting AI
+      {/* Already traded today */}
+      {traded && openPositions.length === 0 && (
+        <div className="text-[10px] text-white/20">
+          ✓ Traded today
         </div>
       )}
     </div>

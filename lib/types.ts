@@ -71,6 +71,22 @@ export interface Position {
   troughPnl: number;
 }
 
+export interface TradeReview {
+  positionId: string;
+  symbol: string;
+  direction: Direction;
+  outcome: "win" | "loss";
+  pnl: number;
+  pnlPercent: number;
+  entryPrice: number;
+  exitPrice: number;
+  holdingTimeMinutes: number;
+  triggerChangePercent: number;
+  review: string; // AI-generated post-trade analysis
+  lessons: string; // what to do differently next time
+  timestamp: string;
+}
+
 export interface Portfolio {
   cash: number;
   startingCash: number;
