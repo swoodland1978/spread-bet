@@ -3,7 +3,7 @@
 import { useStore } from "@/lib/store";
 
 export default function PortfolioBar() {
-  const { portfolio, positions, lastPollAt } = useStore();
+  const { portfolio, positions, lastScanAt } = useStore();
   const open = positions.filter(p => p.status === "open");
   const unrealisedPnl = open.reduce((s, p) => s + p.pnl, 0);
   const winRate = portfolio.totalTrades > 0
@@ -22,10 +22,10 @@ export default function PortfolioBar() {
         sub={winRate !== null ? `${winRate}% win rate` : "No trades yet"} />
       <Stat label="W / L" value={`${portfolio.winningTrades} / ${portfolio.losingTrades}`}
         sub="Closed trades" />
-      {lastPollAt && (
+      {lastScanAt && (
         <div className="ml-auto text-right">
-          <p className="text-[10px] text-white/30">Last updated</p>
-          <p className="text-[10px] text-white/50">{new Date(lastPollAt).toLocaleTimeString("en-GB")}</p>
+          <p className="text-[10px] text-white/30">Last scan</p>
+          <p className="text-[10px] text-white/50">{new Date(lastScanAt).toLocaleTimeString("en-GB")}</p>
         </div>
       )}
     </div>

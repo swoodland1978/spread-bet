@@ -1,138 +1,143 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
-import { useStore, getTriggeredStocks } from "@/lib/store";
+import { useEffect, useState } from "react";
+import { useStore } from "@/lib/store";
+import type { LogEntry } from "@/lib/store";
 import StockCard from "@/components/dashboard/StockCard";
 import PortfolioBar from "@/components/dashboard/PortfolioBar";
 import PositionsList from "@/components/dashboard/PositionsList";
 import AnalysisFeed from "@/components/dashboard/AnalysisFeed";
-import type { StockQuote, AIAnalysis } from "@/lib/types";
 
-const POLL_MS = 60_000;
+const SCAN_INTERVAL_MS = 60_000; // scan every 60 seconds
 
 export default function Dashboard() {
-  const { updateQuotes, addAnalysis, openPositionFromAnalysis, setAnalysing, quotes } = useStore();
-  const [tab, setTab] = useState<"watchlist" | "positions" | "analysis">("watchlist");
-  const [marketOpen, setMarketOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchPrices = useCallback(async () => {
-    try {
-      const res = await fetch("/api/prices");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      updateQuotes(data.quotes ?? []);
-      setMarketOpen(data.marketOpen ?? false);
-      setError(null);
-    } catch {
-      setError("Failed to fetch prices — check your connection");
-    } finally {
-      setLoading(false);
-    }
-  }, [updateQuotes]);
-
-  useEffect(() => {
-    fetchPrices();
-    const id = setInterval(fetchPrices, POLL_MS);
-    return () => clearInterval(id);
-  }, [fetchPrices]);
-
-  const handleAnalyse = useCallback(async (quote: StockQuote) => {
-    setAnalysing(quote.symbol, true);
-    try {
-      const newsRes = await fetch(`/api/news?symbol=${quote.symbol}&name=${encodeURIComponent(quote.name)}`);
-      const newsData = await newsRes.json();
-
-      const analysisRes = await fetch("/api/analyse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol: quote.symbol,
-          name: quote.name,
-          triggerPrice: quote.price,
-          triggerChangePercent: quote.changePercent,
-          news: newsData.articles ?? [],
-        }),
-      });
-      if (!analysisRes.ok) throw new Error("Analysis failed");
-      const analysis: AIAnalysis = await analysisRes.json();
-
-      addAnalysis(analysis);
-      if (analysis.direction !== "AVOID") {
-        openPositionFromAnalysis(analysis, quote.price);
-      }
-    } catch (e) {
-      console.error("Analyse error:", e);
-    } finally {
-      setAnalysing(quote.symbol, false);
-    }
-  }, [addAnalysis, openPositionFromAnalysis, setAnalysing]);
-
-  const triggered = getTriggeredStocks(quotes);
+  const runScan = useStore(s => s.runScan);
+  const scanning = useStore(s => s.scanning);
+  const quotes = useStore(s => s.quotes);
+  const marketOpen = useStore(s => s.marketOpen);
+  const lastScanAt = useStore(s => s.lastScanAt);
+  const log = useStore(s => s.log);
+  const resetSimulation = useStore(s => s.resetSimulation);
   const openCount = useStore(s => s.positions.filter(p => p.status === "open").length);
+  const [tab, setTab] = useState<"live" | "positions" | "analysis">("live");
+
+  // Auto-scan on mount + interval
+  useEffect(() => {
+    runScan();
+    const id = setInterval(runScan, SCAN_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [runScan]);
 
   return (
     <div className="min-h-dvh bg-[#0A0A0F] text-white">
+      {/* Header */}
       <header className="border-b border-white/10 px-4 py-3 flex items-center justify-between sticky top-0 bg-[#0A0A0F]/95 backdrop-blur z-10">
         <div>
-          <h1 className="text-base font-bold tracking-tight">SpreadSim <span className="text-white/30 font-normal text-sm">by GuidGuide AI</span></h1>
-          <p className="text-[10px] text-white/30">Paper trading · AI-driven · Spread bet style · £10k starting</p>
+          <h1 className="text-lg font-bold tracking-tight">SpreadSim</h1>
+          <p className="text-[10px] text-white/30">Automated AI paper trading · £10k starting · Spread bet style</p>
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${marketOpen ? "bg-emerald-500/20 text-emerald-400" : "bg-white/10 text-white/30"}`}>
-            {marketOpen ? "● Market Open" : "○ Market Closed"}
+            {marketOpen ? "● NYSE Open" : "○ NYSE Closed"}
           </span>
-          <button onClick={fetchPrices} className="text-[10px] text-white/30 hover:text-white px-2 py-1 rounded border border-white/10 hover:border-white/30 transition-colors">
-            ↻ Refresh
+          {scanning && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 border-2 border-white/20 border-t-emerald-400 rounded-full animate-spin" />
+              <span className="text-[10px] text-emerald-400">Scanning…</span>
+            </div>
+          )}
+          <button onClick={() => runScan()} disabled={scanning}
+            className="text-[10px] text-white/30 hover:text-white px-2 py-1 rounded border border-white/10 hover:border-white/30 transition-colors disabled:opacity-30">
+            ↻ Scan now
           </button>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-4 flex flex-col gap-4 pb-20">
+      <main className="max-w-6xl mx-auto px-4 py-4 flex flex-col gap-4 pb-20">
+        {/* Portfolio summary */}
         <PortfolioBar />
 
-        {triggered.length > 0 && (
-          <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/5 px-4 py-2.5 flex items-center gap-2">
-            <span className="text-yellow-400">⚡</span>
-            <p className="text-xs text-yellow-300">
-              <strong>{triggered.length} stock{triggered.length !== 1 ? "s" : ""}</strong> moved {">"}3% — AI analysis available below
-            </p>
+        {/* Tabs */}
+        <div className="flex items-center justify-between">
+          <div className="flex gap-1 bg-white/5 border border-white/10 rounded-xl p-1">
+            {([
+              { key: "live" as const, label: "Live Feed" },
+              { key: "positions" as const, label: `Positions (${openCount})` },
+              { key: "analysis" as const, label: "AI Decisions" },
+            ]).map(t => (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === t.key ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"}`}>
+                {t.label}
+              </button>
+            ))}
           </div>
-        )}
-
-        <div className="flex gap-1 bg-white/5 border border-white/10 rounded-xl p-1 w-fit">
-          {(["watchlist", "positions", "analysis"] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-semibold capitalize transition-colors ${tab === t ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"}`}>
-              {t === "positions" ? `Positions (${openCount})` : t}
-            </button>
-          ))}
+          <button onClick={resetSimulation}
+            className="text-[10px] text-red-400/50 hover:text-red-400 px-2 py-1 rounded border border-red-500/20 hover:border-red-500/40 transition-colors">
+            Reset £10k
+          </button>
         </div>
 
-        {tab === "watchlist" && (
-          loading ? (
-            <div className="flex items-center justify-center gap-3 py-16">
-              <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-              <p className="text-sm text-white/40">Fetching live prices…</p>
+        {/* Live Feed — stock grid + activity log side by side */}
+        {tab === "live" && (
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+            {/* Stock grid — 3 cols on desktop */}
+            <div className="lg:col-span-3">
+              <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest mb-2">
+                Watchlist · {quotes.length} stocks
+                {lastScanAt && <span className="text-white/20 ml-2">· updated {new Date(lastScanAt).toLocaleTimeString("en-GB")}</span>}
+              </h3>
+              {quotes.length === 0 ? (
+                <div className="flex items-center justify-center gap-3 py-16">
+                  <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                  <p className="text-sm text-white/40">Loading prices…</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {quotes.map(q => (
+                    <StockCard key={q.symbol} quote={q} />
+                  ))}
+                </div>
+              )}
             </div>
-          ) : error ? (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-center">
-              <p className="text-sm text-red-400 mb-2">{error}</p>
-              <button onClick={fetchPrices} className="text-xs text-white/50 hover:text-white border border-white/20 px-3 py-1 rounded-lg">Retry</button>
+
+            {/* Activity log — 2 cols on desktop */}
+            <div className="lg:col-span-2">
+              <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest mb-2">Activity Log</h3>
+              <div className="rounded-xl border border-white/10 bg-white/3 p-3 max-h-[600px] overflow-y-auto flex flex-col gap-1">
+                {log.length === 0 ? (
+                  <p className="text-white/20 text-xs text-center py-8">Waiting for first scan…</p>
+                ) : (
+                  log.slice(0, 50).map(entry => (
+                    <LogLine key={entry.id} entry={entry} />
+                  ))
+                )}
+              </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-              {quotes.map(q => (
-                <StockCard key={q.symbol} quote={q} onAnalyse={handleAnalyse} />
-              ))}
-            </div>
-          )
+          </div>
         )}
 
         {tab === "positions" && <PositionsList />}
         {tab === "analysis" && <AnalysisFeed />}
       </main>
+    </div>
+  );
+}
+
+function LogLine({ entry }: { entry: LogEntry }) {
+  const colorMap: Record<LogEntry["type"], string> = {
+    scan: "text-white/30",
+    trigger: "text-yellow-400",
+    analysis: "text-blue-400",
+    trade_open: "text-emerald-400",
+    trade_close: "text-orange-400",
+    info: "text-white/40",
+    error: "text-red-400",
+  };
+
+  return (
+    <div className="flex gap-2 items-start text-[11px] leading-tight py-0.5">
+      <span className="text-white/20 shrink-0 font-mono">{new Date(entry.time).toLocaleTimeString("en-GB")}</span>
+      <span className={colorMap[entry.type]}>{entry.message}</span>
     </div>
   );
 }
