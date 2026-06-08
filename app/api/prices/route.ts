@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import yahooFinance from "yahoo-finance2";
 import { TRACKED_STOCKS } from "@/lib/stocks";
+import { fetchYahooQuotes } from "@/lib/yahoo";
 import type { StockQuote } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -19,34 +19,28 @@ function isMarketOpen(): boolean {
 export async function GET() {
   try {
     const open = isMarketOpen();
-    const quotes: StockQuote[] = [];
+    const symbols = TRACKED_STOCKS.map(s => s.symbol);
+    const rawQuotes = await fetchYahooQuotes(symbols);
 
-    // Fetch each stock individually to avoid typing issues with batch quote
-    const results = await Promise.allSettled(
-      TRACKED_STOCKS.map(async (stock) => {
-        const q = await yahooFinance.quote(stock.symbol);
-        const price = (q as Record<string, unknown>).regularMarketPrice as number ?? 0;
-        const prev = (q as Record<string, unknown>).regularMarketPreviousClose as number ?? price;
-        const changePct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
-        return {
-          symbol: stock.symbol,
-          name: stock.name,
-          price,
-          previousClose: prev,
-          changePercent: Math.round(changePct * 100) / 100,
-          high: (q as Record<string, unknown>).regularMarketDayHigh as number ?? price,
-          low: (q as Record<string, unknown>).regularMarketDayLow as number ?? price,
-          volume: (q as Record<string, unknown>).regularMarketVolume as number ?? 0,
-          marketCap: (q as Record<string, unknown>).marketCap as number | undefined,
-          updatedAt: new Date().toISOString(),
-          marketOpen: open,
-        } satisfies StockQuote;
-      })
-    );
-
-    for (const r of results) {
-      if (r.status === "fulfilled") quotes.push(r.value);
-    }
+    const quotes: StockQuote[] = rawQuotes.map(q => {
+      const stock = TRACKED_STOCKS.find(s => s.symbol === q.symbol);
+      const price = q.regularMarketPrice;
+      const prev = q.regularMarketPreviousClose || price;
+      const changePct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+      return {
+        symbol: q.symbol,
+        name: stock?.name ?? q.symbol,
+        price,
+        previousClose: prev,
+        changePercent: Math.round(changePct * 100) / 100,
+        high: q.regularMarketDayHigh || price,
+        low: q.regularMarketDayLow || price,
+        volume: q.regularMarketVolume || 0,
+        marketCap: q.marketCap,
+        updatedAt: new Date().toISOString(),
+        marketOpen: open,
+      };
+    });
 
     return NextResponse.json({ quotes, marketOpen: open });
   } catch (err) {

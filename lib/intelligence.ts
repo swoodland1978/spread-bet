@@ -1,4 +1,4 @@
-import yahooFinance from "yahoo-finance2";
+import { fetchChangePercent } from "./yahoo";
 import type { StockQuote, NewsItem } from "./types";
 
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
@@ -66,18 +66,9 @@ export interface IntelligencePacket {
   briefing: string;
 }
 
-/** Fetch a quote and return change % */
+/** Fetch a quote and return change % — uses direct Yahoo API */
 async function getChangePercent(symbol: string): Promise<number | null> {
-  try {
-    const q = await yahooFinance.quote(symbol);
-    const data = q as Record<string, unknown>;
-    const price = data.regularMarketPrice as number;
-    const prev = data.regularMarketPreviousClose as number;
-    if (!price || !prev) return null;
-    return Math.round(((price - prev) / prev) * 10000) / 100;
-  } catch {
-    return null;
-  }
+  return fetchChangePercent(symbol);
 }
 
 /** Fetch news from NewsAPI */
