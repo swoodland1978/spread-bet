@@ -8,17 +8,33 @@ import type { NewsItem } from "./types";
 // ── RSS Feed Sources ─────────────────────────────────────────────────────────
 
 const MACRO_FEEDS = [
+  // ── UK ──
   { url: "https://feeds.bbci.co.uk/news/business/rss.xml", source: "BBC Business" },
+  { url: "https://feeds.bbci.co.uk/news/world/rss.xml", source: "BBC World" },
   { url: "https://feeds.skynews.com/feeds/rss/business.xml", source: "Sky News Business" },
-  { url: "https://www.cnbc.com/id/10001147/device/rss/rss.html", source: "CNBC" },
-  { url: "https://feeds.reuters.com/reuters/businessNews", source: "Reuters" },
+  { url: "https://feeds.skynews.com/feeds/rss/world.xml", source: "Sky News World" },
   { url: "https://www.theguardian.com/uk/business/rss", source: "The Guardian" },
-  { url: "https://feeds.marketwatch.com/marketwatch/topstories/", source: "MarketWatch" },
-  { url: "https://feeds.marketwatch.com/marketwatch/marketpulse/", source: "MarketWatch Pulse" },
+  { url: "https://www.ft.com/?format=rss", source: "Financial Times" },
+  // ── US ──
+  { url: "https://www.cnbc.com/id/10001147/device/rss/rss.html", source: "CNBC" },
   { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664", source: "CNBC Finance" },
   { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910", source: "CNBC Economy" },
+  { url: "http://rss.cnn.com/rss/money_latest.rss", source: "CNN Business" },
+  { url: "http://rss.cnn.com/rss/cnn_topstories.rss", source: "CNN Top Stories" },
+  { url: "https://moxie.foxbusiness.com/google-publisher/latest.xml", source: "Fox Business" },
+  { url: "https://moxie.foxbusiness.com/google-publisher/markets.xml", source: "Fox Business Markets" },
+  { url: "https://feeds.bloomberg.com/markets/news.rss", source: "Bloomberg Markets" },
+  { url: "https://feeds.bloomberg.com/politics/news.rss", source: "Bloomberg Politics" },
+  { url: "https://feeds.reuters.com/reuters/businessNews", source: "Reuters" },
+  { url: "https://feeds.reuters.com/reuters/topNews", source: "Reuters Top" },
+  { url: "https://feeds.marketwatch.com/marketwatch/topstories/", source: "MarketWatch" },
+  { url: "https://feeds.marketwatch.com/marketwatch/marketpulse/", source: "MarketWatch Pulse" },
   { url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US", source: "Yahoo Finance" },
-  { url: "https://www.ft.com/?format=rss", source: "Financial Times" },
+  // ── Global / Wire ──
+  { url: "https://www.investing.com/rss/news.rss", source: "Investing.com" },
+  { url: "https://feeds.reuters.com/reuters/globalmarketsNews", source: "Reuters Global Markets" },
+  { url: "https://www.ft.com/companies?format=rss", source: "FT Companies" },
+  { url: "https://www.ft.com/markets?format=rss", source: "FT Markets" },
 ];
 
 const STOCK_NEWS_FEEDS = [
@@ -26,6 +42,9 @@ const STOCK_NEWS_FEEDS = [
   { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069", source: "CNBC Tech" },
   { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258", source: "CNBC Crypto" },
   { url: "https://www.investing.com/rss/news.rss", source: "Investing.com" },
+  { url: "http://rss.cnn.com/rss/money_latest.rss", source: "CNN Business" },
+  { url: "https://moxie.foxbusiness.com/google-publisher/latest.xml", source: "Fox Business" },
+  { url: "https://feeds.bloomberg.com/markets/news.rss", source: "Bloomberg" },
 ];
 
 // Per-stock Yahoo Finance RSS — symbol-specific news
