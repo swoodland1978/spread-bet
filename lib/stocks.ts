@@ -34,8 +34,22 @@ export const TRACKED_STOCKS: TrackedStock[] = [
 
 export const SYMBOLS = TRACKED_STOCKS.map(s => s.symbol);
 
-export const TRIGGER_PCT = 3;      // % move that triggers AI analysis
-export const TAKE_PROFIT_PCT = 4;  // % gain to auto-close
-export const STOP_LOSS_PCT = 4;    // % loss to auto-close
+export const TRIGGER_PCT = 4;      // % move that triggers AI analysis
+export const TAKE_PROFIT_PCT = 2;  // % gain to auto-close (conservative target)
+export const STOP_LOSS_PCT = 4;    // % loss to auto-close (2:1 reward:risk)
 export const STARTING_BANKROLL = 10_000; // £
 export const STAKE_PER_POINT = 1;  // £ per point default stake
+
+/**
+ * STRATEGY: Mean Reversion with AI Filter
+ *
+ * 1. Stock moves 4%+ intraday → trigger
+ * 2. DEFAULT action: fade the move (buy dips, short rips)
+ *    - Stock DOWN 4% → BUY (expect bounce)
+ *    - Stock UP 4% → SHORT (expect fade)
+ * 3. AI reviews news — if the move is justified (earnings, FDA, M&A)
+ *    then AVOID or go WITH the trend instead of fading
+ * 4. Take profit at +2% (conservative, high hit rate)
+ * 5. Stop loss at -4% (protect against continuation moves)
+ * 6. Close all positions at market close (intraday only)
+ */

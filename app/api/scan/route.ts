@@ -68,18 +68,47 @@ async function analyseStock(quote: StockQuote): Promise<AIAnalysis | null> {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const direction = quote.changePercent > 0 ? "UP" : "DOWN";
 
-  const prompt = `You are a world-class intraday spread bet trader. Analyse this stock move.
+  const defaultFade = quote.changePercent > 0 ? "SHORT" : "LONG";
+  const defaultFadeExplain = quote.changePercent > 0
+    ? "SHORT (fade the rally — expect it to pull back)"
+    : "LONG (buy the dip — expect a bounce)";
 
-STOCK: ${quote.name} (${quote.symbol})
+  const prompt = `You are a world-class intraday spread bet trader using a MEAN REVERSION strategy.
+
+═══ STRATEGY ═══
+Our default action is to FADE big moves — buy dips, short rips.
+- Stock DOWN ${TRIGGER_PCT}%+ → DEFAULT: BUY (expect bounce back)
+- Stock UP ${TRIGGER_PCT}%+ → DEFAULT: SHORT (expect fade back)
+- Take profit at +${TAKE_PROFIT_PCT}% | Stop loss at -${STOP_LOSS_PCT}%
+- Intraday only — close everything at market close.
+
+YOUR JOB: Decide if we should FADE this move (default) or AVOID it.
+Only AVOID if the move is clearly justified and will continue (earnings beat/miss, FDA decision, M&A announcement, major regulatory action). If there's no strong catalyst, the move is likely to revert — FADE IT.
+
+You may also go WITH the trend (opposite of fade) if the news is extremely strong and the move has room to run — but this should be rare.
+
+═══ TRIGGERED STOCK ═══
+${quote.name} (${quote.symbol})
 PRICE: $${quote.price.toFixed(2)} | PREV CLOSE: $${quote.previousClose.toFixed(2)}
-MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% (${direction})
-RANGE: $${quote.low.toFixed(2)} – $${quote.high.toFixed(2)}
+TODAY'S MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% (${direction})
+DAY RANGE: $${quote.low.toFixed(2)} – $${quote.high.toFixed(2)}
 
+DEFAULT TRADE: ${defaultFadeExplain}
+
+═══ MARKET INTELLIGENCE ═══
 ${briefing}
 
-Choose LONG / SHORT / AVOID. Stake £0.5–£3/pt. Auto-close at +${TAKE_PROFIT_PCT}% or -${STOP_LOSS_PCT}%.
+═══ DECISION ═══
+Based on the news and context above:
+1. Is this move driven by a SPECIFIC, MATERIAL catalyst? (earnings, FDA, M&A, major contract)
+2. Or is it general market sentiment / sector rotation / no clear reason?
+3. If no clear catalyst → FADE the move (${defaultFade})
+4. If strong catalyst → AVOID (the move will continue, don't fight it)
+
+Stake sizing: £0.5/pt (low conviction) to £3/pt (high conviction this will revert)
+
 Respond ONLY with JSON:
-{"direction":"LONG"|"SHORT"|"AVOID","confidence":0-100,"stakePerPoint":0.5|1|2|3,"reasoning":"3-4 sentences."}`;
+{"direction":"LONG"|"SHORT"|"AVOID","confidence":0-100,"stakePerPoint":0.5|1|2|3,"reasoning":"3-4 sentences explaining: what caused the move, whether it will revert, and why you chose this action."}`;
 
   try {
     const msg = await anthropic.messages.create({
@@ -117,15 +146,16 @@ export async function GET() {
   let quotes: StockQuote[] = [];
   const analyses: AIAnalysis[] = [];
 
-  // 1. Fetch all stock prices from Finnhub (5 at a time)
+  // 1. Fetch all stock prices from Finnhub (3 at a time with delay to respect rate limit)
   try {
     const symbols = TRACKED_STOCKS.map(s => s.symbol);
     const batches: string[][] = [];
-    for (let i = 0; i < symbols.length; i += 5) {
-      batches.push(symbols.slice(i, i + 5));
+    for (let i = 0; i < symbols.length; i += 3) {
+      batches.push(symbols.slice(i, i + 3));
     }
-    for (const batch of batches) {
-      const results = await Promise.allSettled(batch.map(s => fetchFinnhubQuote(s)));
+    for (let i = 0; i < batches.length; i++) {
+      if (i > 0) await new Promise(r => setTimeout(r, 250)); // 250ms between batches
+      const results = await Promise.allSettled(batches[i].map(s => fetchFinnhubQuote(s)));
       for (const r of results) {
         if (r.status === "fulfilled" && r.value) quotes.push(r.value);
       }

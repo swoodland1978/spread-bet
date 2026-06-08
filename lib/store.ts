@@ -73,11 +73,13 @@ export const useStore = create<AppState>()(
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
 
-          const quotes: StockQuote[] = data.quotes ?? [];
+          const newQuotes: StockQuote[] = data.quotes ?? [];
           const marketOpen: boolean = data.marketOpen ?? false;
           const analyses: AIAnalysis[] = data.analyses ?? [];
           const triggered: string[] = data.triggered ?? [];
 
+          // Keep last known quotes if this scan returned empty (rate limit etc)
+          const quotes = newQuotes.length > 0 ? newQuotes : get().quotes;
           set({ quotes, marketOpen, lastScanAt: data.scannedAt });
           addLog("scan", `${quotes.length} stocks fetched. Market ${marketOpen ? "OPEN" : "CLOSED"}.`);
 
@@ -199,6 +201,7 @@ export const useStore = create<AppState>()(
     {
       name: "spreadbet-v3",
       partialize: (s) => ({
+        quotes: s.quotes,
         positions: s.positions,
         analyses: s.analyses,
         portfolio: s.portfolio,

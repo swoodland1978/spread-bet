@@ -8,7 +8,7 @@ import PortfolioBar from "@/components/dashboard/PortfolioBar";
 import PositionsList from "@/components/dashboard/PositionsList";
 import AnalysisFeed from "@/components/dashboard/AnalysisFeed";
 
-const SCAN_INTERVAL_MS = 60_000; // scan every 60 seconds
+const SCAN_INTERVAL_MS = 90_000; // scan every 90 seconds (respects Finnhub rate limit)
 
 export default function Dashboard() {
   const runScan = useStore(s => s.runScan);
