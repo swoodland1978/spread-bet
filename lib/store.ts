@@ -17,17 +17,20 @@ interface AppState {
   quotes: StockQuote[];
   positions: Position[];
   reviews: TradeReview[];
+  playbook: string;
+  playbookGeneratedAt: string | null;
   portfolio: Portfolio;
   log: LogEntry[];
   lastScanAt: string | null;
   marketOpen: boolean;
   scanning: boolean;
-  tradedToday: string[]; // symbols already traded this session
+  tradedToday: string[];
 
   // Actions
   runScan: () => Promise<void>;
   tickPositions: () => void;
   closePosition: (id: string, price: number, reason: CloseReason) => void;
+  generatePlaybook: () => Promise<void>;
   addLog: (type: LogEntry["type"], message: string) => void;
   resetSimulation: () => void;
 }
@@ -47,6 +50,8 @@ export const useStore = create<AppState>()(
       quotes: [],
       positions: [],
       reviews: [],
+      playbook: "",
+      playbookGeneratedAt: null,
       portfolio: INITIAL_PORTFOLIO,
       log: [],
       lastScanAt: null,
@@ -219,19 +224,44 @@ export const useStore = create<AppState>()(
         });
       },
 
+      generatePlaybook: async () => {
+        const { reviews, playbook, addLog } = get();
+        if (reviews.length === 0) {
+          addLog("info", "No trades to generate playbook from yet.");
+          return;
+        }
+        addLog("info", "📖 Generating playbook from all trade reviews…");
+        try {
+          const res = await fetch("/api/playbook", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reviews, currentPlaybook: playbook }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          set({ playbook: data.playbook, playbookGeneratedAt: data.generatedAt });
+          addLog("info", `📖 Playbook updated (${reviews.length} trades analysed)`);
+        } catch (err) {
+          addLog("error", `Playbook generation failed: ${err instanceof Error ? err.message : "unknown"}`);
+        }
+      },
+
       resetSimulation: () => {
         set({
           positions: [], reviews: [], portfolio: INITIAL_PORTFOLIO,
           log: [], tradedToday: [],
+          // Keep playbook — learnings persist across resets
         });
       },
     }),
     {
-      name: "spreadbet-v4",
+      name: "spreadbet-v5",
       partialize: (s) => ({
         quotes: s.quotes,
         positions: s.positions,
         reviews: s.reviews,
+        playbook: s.playbook,
+        playbookGeneratedAt: s.playbookGeneratedAt,
         portfolio: s.portfolio,
         tradedToday: s.tradedToday,
       }),
@@ -242,10 +272,12 @@ export const useStore = create<AppState>()(
 /** Fire-and-forget: send closed trade to AI for post-trade review */
 async function requestTradeReview(trade: Record<string, unknown>) {
   try {
+    // Include playbook context so the AI's reviews get smarter over time
+    const playbook = useStore.getState().playbook;
     const res = await fetch("/api/review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(trade),
+      body: JSON.stringify({ ...trade, playbook }),
     });
     if (!res.ok) return;
     const review = await res.json();
@@ -253,6 +285,12 @@ async function requestTradeReview(trade: Record<string, unknown>) {
       useStore.getState().addLog("review", `🎓 ${trade.symbol} review: ${review.review}`);
       useStore.getState().addLog("review", `💡 ${trade.symbol} lesson: ${review.lessons}`);
       useStore.setState(s => ({ reviews: [review, ...s.reviews].slice(0, 50) }));
+
+      // Auto-regenerate playbook every 5 trades
+      const reviewCount = useStore.getState().reviews.length;
+      if (reviewCount > 0 && reviewCount % 5 === 0) {
+        useStore.getState().generatePlaybook();
+      }
     }
   } catch {
     // Non-critical — don't block anything

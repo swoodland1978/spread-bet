@@ -7,6 +7,7 @@ import StockCard from "@/components/dashboard/StockCard";
 import PortfolioBar from "@/components/dashboard/PortfolioBar";
 import PositionsList from "@/components/dashboard/PositionsList";
 import ReviewsFeed from "@/components/dashboard/ReviewsFeed";
+import Playbook from "@/components/dashboard/Playbook";
 
 const SCAN_INTERVAL_MS = 90_000; // scan every 90 seconds (respects Finnhub rate limit)
 
@@ -19,7 +20,7 @@ export default function Dashboard() {
   const log = useStore(s => s.log);
   const resetSimulation = useStore(s => s.resetSimulation);
   const openCount = useStore(s => s.positions.filter(p => p.status === "open").length);
-  const [tab, setTab] = useState<"live" | "positions" | "reviews">("live");
+  const [tab, setTab] = useState<"live" | "positions" | "reviews" | "playbook">("live");
   const reviewCount = useStore(s => s.reviews.length);
 
   // Auto-scan on mount + interval
@@ -64,7 +65,8 @@ export default function Dashboard() {
             {([
               { key: "live" as const, label: "Live Feed" },
               { key: "positions" as const, label: `Positions (${openCount})` },
-              { key: "reviews" as const, label: `Trade Reviews (${reviewCount})` },
+              { key: "reviews" as const, label: `Reviews (${reviewCount})` },
+              { key: "playbook" as const, label: "Playbook" },
             ]).map(t => (
               <button key={t.key} onClick={() => setTab(t.key)}
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === t.key ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"}`}>
@@ -119,6 +121,7 @@ export default function Dashboard() {
 
         {tab === "positions" && <PositionsList />}
         {tab === "reviews" && <ReviewsFeed />}
+        {tab === "playbook" && <Playbook />}
       </main>
     </div>
   );

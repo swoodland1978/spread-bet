@@ -28,6 +28,12 @@ Worst P&L during trade: £${trade.troughPnl?.toFixed(2) ?? "0.00"}
 
 STRATEGY: We mechanically fade >4% moves. Buy dips, short rips. Take profit at +1%, stop loss at -2%.
 
+${trade.playbook ? `═══ ACCUMULATED PLAYBOOK (learnings from all previous trades) ═══
+${trade.playbook}
+═══ END PLAYBOOK ═══
+
+Use the playbook above to give more specific, pattern-aware feedback. Reference relevant playbook rules if this trade confirms or contradicts them.
+` : ""}
 Respond with ONLY this JSON:
 {
   "review": "2-3 sentences: What happened? Why did this trade win/lose? Was the entry timing good?",
