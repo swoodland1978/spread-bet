@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import yahooFinance from "yahoo-finance2";
 import Anthropic from "@anthropic-ai/sdk";
-import { TRACKED_STOCKS, TRIGGER_PCT, STAKE_PER_POINT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
-import type { StockQuote, NewsItem, AIAnalysis } from "@/lib/types";
+import { TRACKED_STOCKS, TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
+import { gatherIntelligence } from "@/lib/intelligence";
+import type { StockQuote, AIAnalysis } from "@/lib/types";
 import { nanoid } from "nanoid";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const NEWS_API_KEY = process.env.NEWS_API_KEY;
 
 function isMarketOpen(): boolean {
   const now = new Date();
@@ -30,10 +30,7 @@ async function fetchQuote(symbol: string, name: string): Promise<StockQuote | nu
     const prev = (data.regularMarketPreviousClose as number) ?? price;
     const changePct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
     return {
-      symbol,
-      name,
-      price,
-      previousClose: prev,
+      symbol, name, price, previousClose: prev,
       changePercent: Math.round(changePct * 100) / 100,
       high: (data.regularMarketDayHigh as number) ?? price,
       low: (data.regularMarketDayLow as number) ?? price,
@@ -47,62 +44,58 @@ async function fetchQuote(symbol: string, name: string): Promise<StockQuote | nu
   }
 }
 
-async function fetchNews(symbol: string, name: string): Promise<NewsItem[]> {
-  if (!NEWS_API_KEY) return [];
-  try {
-    const query = encodeURIComponent(`${name} stock`);
-    const res = await fetch(`https://newsapi.org/v2/everything?q=${query}&sortBy=publishedAt&pageSize=8&language=en&apiKey=${NEWS_API_KEY}`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.articles ?? []).slice(0, 8).map((a: { title?: string; description?: string; source?: { name?: string }; url?: string; publishedAt?: string }) => ({
-      symbol,
-      headline: a.title ?? "",
-      summary: a.description ?? "",
-      source: a.source?.name ?? "",
-      url: a.url ?? "",
-      publishedAt: a.publishedAt ?? new Date().toISOString(),
-    }));
-  } catch {
-    return [];
-  }
-}
-
-async function analyseStock(quote: StockQuote, news: NewsItem[]): Promise<AIAnalysis | null> {
-  const headlines = news.map(n => `• ${n.headline} (${n.source})`).join("\n");
+async function analyseWithFullContext(quote: StockQuote, briefing: string): Promise<AIAnalysis | null> {
   const direction = quote.changePercent > 0 ? "UP" : "DOWN";
 
-  const prompt = `You are an expert intraday spread bet trader analysing whether a stock move is real or will reverse.
+  const prompt = `You are a world-class intraday spread bet trader. A stock in our watchlist has moved significantly. You have been given comprehensive market intelligence — use ALL of it to determine whether this move is real and sustainable, or whether it will reverse.
 
-STOCK: ${quote.name} (${quote.symbol})
+══════════════════════════════════════════════
+TRIGGERED STOCK: ${quote.name} (${quote.symbol})
 CURRENT PRICE: $${quote.price.toFixed(2)}
+PREVIOUS CLOSE: $${quote.previousClose.toFixed(2)}
 TODAY'S MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% (${direction})
-DAY HIGH: $${quote.high.toFixed(2)} | DAY LOW: $${quote.low.toFixed(2)}
-VOLUME: ${(quote.volume / 1_000_000).toFixed(1)}M
-TIME: ${new Date().toUTCString()}
+DAY RANGE: $${quote.low.toFixed(2)} – $${quote.high.toFixed(2)}
+VOLUME: ${(quote.volume / 1_000_000).toFixed(1)}M shares
+══════════════════════════════════════════════
 
-RECENT NEWS:
-${headlines || "No recent news available."}
+${briefing}
 
-ANALYSIS REQUIRED:
-1. Is this ${Math.abs(quote.changePercent).toFixed(1)}% move justified by the news, or is it likely an intraday overreaction?
-2. Will it sustain/extend, or will it revert toward the open?
-3. Should we go LONG (bet it stays up / goes higher), SHORT (bet it drops / reverses), or AVOID?
+══════════════════════════════════════════════
+YOUR TASK:
+══════════════════════════════════════════════
 
-RULES:
-- Intraday ONLY — auto-close at +${TAKE_PROFIT_PCT}% profit or -${STOP_LOSS_PCT}% loss
-- We can go LONG or SHORT
-- Only trade when you have conviction — AVOID is often the right call
-- News-driven moves (earnings, FDA, M&A) tend to sustain
-- Momentum exhaustion after big moves is common — consider shorting overextended stocks
-- Low volume moves are less reliable
+Analyse this ${Math.abs(quote.changePercent).toFixed(1)}% move using everything above. Consider:
 
-Respond ONLY with JSON:
-{"direction":"LONG"|"SHORT"|"AVOID","confidence":0-100,"stakePerPoint":0.5|1|2|3,"reasoning":"2-3 sentences explaining your analysis"}`;
+1. NEWS CATALYST — Is there a clear reason for this move? Earnings? FDA? Geopolitical? If news-driven, moves tend to sustain. If no catalyst, it's likely noise.
+
+2. MACRO ALIGNMENT — Is the broader market moving the same direction? If NASDAQ is down 2% and this stock is down 4%, the extra 2% might revert. If NASDAQ is flat and this stock dropped 5%, something stock-specific is happening.
+
+3. SECTOR CONTEXT — Is the whole sector moving, or just this stock? Sector-wide moves are harder to fade. Single-stock moves on news are more tradeable.
+
+4. MOMENTUM vs EXHAUSTION — Has the stock already made its big move (price near day high/low), or is there room to run? High volume confirms conviction. Low volume suggests the move may fade.
+
+5. GOVERNMENT/POLICY — Any tariffs, regulation, rate decisions, or political events that could sustain or reverse this?
+
+6. SPREAD BET MECHANICS — We bet £/point. Entry includes the spread cost. Auto-close at +${TAKE_PROFIT_PCT}% or -${STOP_LOSS_PCT}%. Position held intraday only.
+
+Based on your analysis, choose the BEST trade:
+- LONG: You believe the stock will continue higher or stay elevated
+- SHORT: You believe the stock will reverse lower or the upward move will fade
+- AVOID: Not enough conviction, or the risk/reward doesn't justify a trade
+
+For stake sizing:
+- £0.5/pt: Low conviction, small bet
+- £1/pt: Moderate conviction
+- £2/pt: High conviction, clear catalyst
+- £3/pt: Very high conviction, strong edge
+
+Respond with ONLY this JSON:
+{"direction":"LONG"|"SHORT"|"AVOID","confidence":0-100,"stakePerPoint":0.5|1|2|3,"reasoning":"3-4 sentences. Explain what's driving the move, whether it's justified, what the macro context says, and why you chose this direction and stake size."}`;
 
   try {
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5",
-      max_tokens: 300,
+      max_tokens: 400,
       messages: [{ role: "user", content: prompt }],
     });
     const text = (msg.content[0] as { type: string; text: string }).text
@@ -118,8 +111,8 @@ Respond ONLY with JSON:
       reasoning: parsed.reasoning ?? "",
       triggerPrice: quote.price,
       triggerChangePercent: quote.changePercent,
-      stakePerPoint: parsed.stakePerPoint ?? STAKE_PER_POINT,
-      newsHeadlines: news.slice(0, 5).map(n => n.headline),
+      stakePerPoint: parsed.stakePerPoint ?? 1,
+      newsHeadlines: [],
       timestamp: new Date().toISOString(),
     };
   } catch (err) {
@@ -128,7 +121,6 @@ Respond ONLY with JSON:
   }
 }
 
-/** Full scan: fetch all prices, identify triggers, gather news, run AI, return results */
 export async function GET() {
   try {
     const marketOpen = isMarketOpen();
@@ -145,17 +137,35 @@ export async function GET() {
     // 2. Find triggered stocks (>3% move)
     const triggered = quotes.filter(q => Math.abs(q.changePercent) >= TRIGGER_PCT);
 
-    // 3. For each triggered stock: fetch news + run AI analysis
+    // 3. For each triggered stock: gather FULL intelligence + run AI
     const analyses: AIAnalysis[] = [];
+    const intelligenceSummaries: Record<string, string> = {};
+
     if (triggered.length > 0 && process.env.ANTHROPIC_API_KEY) {
-      const analysisResults = await Promise.allSettled(
+      const results = await Promise.allSettled(
         triggered.map(async (q) => {
-          const news = await fetchNews(q.symbol, q.name);
-          return analyseStock(q, news);
+          // Gather comprehensive intelligence: stock news, macro, indices, sector
+          const intel = await gatherIntelligence(q);
+          intelligenceSummaries[q.symbol] = intel.briefing;
+          // Feed everything to the AI
+          const analysis = await analyseWithFullContext(q, intel.briefing);
+          return analysis;
         })
       );
-      for (const r of analysisResults) {
-        if (r.status === "fulfilled" && r.value) analyses.push(r.value);
+
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) {
+          // Attach top news headlines to the analysis for display
+          const symbol = r.value.symbol;
+          const stockNews = intelligenceSummaries[symbol];
+          const headlines = stockNews
+            ?.split("\n")
+            .filter(l => l.startsWith("• "))
+            .map(l => l.replace("• ", "").replace(/ \(.*$/, ""))
+            .slice(0, 5) ?? [];
+          r.value.newsHeadlines = headlines;
+          analyses.push(r.value);
+        }
       }
     }
 

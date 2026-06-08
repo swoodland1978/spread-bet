@@ -148,16 +148,23 @@ export const useStore = create<AppState>()(
           const closeReason = shouldClose(pos, q.price);
           changed = true;
 
+          // Record price snapshot
+          const snapshot = { time: new Date().toISOString(), price: q.price, pnl };
+          const history = [...(pos.priceHistory ?? []), snapshot].slice(-120); // keep last 2 hours of 60s ticks
+          const peakPnl = Math.max(pos.peakPnl ?? 0, pnl);
+          const troughPnl = Math.min(pos.troughPnl ?? 0, pnl);
+
           if (closeReason) {
             const label = closeReason === "take_profit" ? "✅ TAKE PROFIT" : "🛑 STOP LOSS";
-            addLog("trade_close", `${label} ${pos.symbol} ${pos.direction} — P&L: ${pnl >= 0 ? "+" : ""}£${pnl.toFixed(2)} (${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(1)}%)`);
+            addLog("trade_close", `${label} ${pos.symbol} ${pos.direction} — P&L: ${pnl >= 0 ? "+" : ""}£${pnl.toFixed(2)} (${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(1)}%) | Peak: £${peakPnl.toFixed(2)} Trough: £${troughPnl.toFixed(2)}`);
             return {
               ...pos, currentPrice: q.price, pnl, pnlPercent,
               status: "closed" as const, exitPrice: q.price,
               exitTime: new Date().toISOString(), closeReason,
+              priceHistory: history, peakPnl, troughPnl,
             };
           }
-          return { ...pos, currentPrice: q.price, pnl, pnlPercent };
+          return { ...pos, currentPrice: q.price, pnl, pnlPercent, priceHistory: history, peakPnl, troughPnl };
         });
 
         if (changed) {

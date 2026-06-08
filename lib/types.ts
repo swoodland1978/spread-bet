@@ -42,6 +42,12 @@ export interface AIAnalysis {
 export type PositionStatus = "open" | "closed";
 export type CloseReason = "take_profit" | "stop_loss" | "end_of_day" | "ai_exit" | "manual";
 
+export interface PriceSnapshot {
+  time: string;
+  price: number;
+  pnl: number;
+}
+
 export interface Position {
   id: string;
   symbol: string;
@@ -58,7 +64,11 @@ export interface Position {
   exitTime?: string;
   closeReason?: CloseReason;
   aiAnalysisId: string;
+  aiReasoning: string;
   igSpread: number;
+  priceHistory: PriceSnapshot[]; // tracked every scan while open
+  peakPnl: number;
+  troughPnl: number;
 }
 
 export interface Portfolio {

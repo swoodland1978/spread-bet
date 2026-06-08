@@ -1,8 +1,7 @@
-import type { Position, Portfolio, AIAnalysis, CloseReason } from "./types";
+import type { Position, Portfolio, AIAnalysis } from "./types";
 import { TAKE_PROFIT_PCT, STOP_LOSS_PCT, STARTING_BANKROLL } from "./stocks";
 import { nanoid } from "nanoid";
 
-/** Calculate P&L for a position given current price */
 export function calcPnl(pos: Position, currentPrice: number): { pnl: number; pnlPercent: number } {
   const points = pos.direction === "LONG"
     ? currentPrice - pos.entryPrice
@@ -12,19 +11,16 @@ export function calcPnl(pos: Position, currentPrice: number): { pnl: number; pnl
   return { pnl: Math.round(pnl * 100) / 100, pnlPercent: Math.round(pnlPercent * 100) / 100 };
 }
 
-/** Determine if a position should be auto-closed */
-export function shouldClose(pos: Position, currentPrice: number): CloseReason | null {
+export function shouldClose(pos: Position, currentPrice: number): "take_profit" | "stop_loss" | null {
   const { pnlPercent } = calcPnl(pos, currentPrice);
   if (pnlPercent >= TAKE_PROFIT_PCT) return "take_profit";
   if (pnlPercent <= -STOP_LOSS_PCT) return "stop_loss";
   return null;
 }
 
-/** Open a new simulated position from an AI analysis */
 export function openPosition(analysis: AIAnalysis, currentPrice: number, igSpread: number): Position | null {
   if (analysis.direction === "AVOID") return null;
 
-  // Apply spread cost to entry price
   const entryPrice = analysis.direction === "LONG"
     ? currentPrice + igSpread / 2
     : currentPrice - igSpread / 2;
@@ -42,11 +38,14 @@ export function openPosition(analysis: AIAnalysis, currentPrice: number, igSprea
     status: "open",
     entryTime: new Date().toISOString(),
     aiAnalysisId: analysis.id,
+    aiReasoning: analysis.reasoning,
     igSpread,
+    priceHistory: [{ time: new Date().toISOString(), price: currentPrice, pnl: 0 }],
+    peakPnl: 0,
+    troughPnl: 0,
   };
 }
 
-/** Compute portfolio summary from positions */
 export function computePortfolio(positions: Position[]): Portfolio {
   const closed = positions.filter(p => p.status === "closed");
   const totalPnl = closed.reduce((sum, p) => sum + p.pnl, 0);
