@@ -9,9 +9,28 @@ import PositionsList from "@/components/dashboard/PositionsList";
 import ReviewsFeed from "@/components/dashboard/ReviewsFeed";
 import Playbook from "@/components/dashboard/Playbook";
 
-const SCAN_INTERVAL_MS = 90_000; // scan every 90 seconds (respects Finnhub rate limit)
+const SCAN_INTERVAL_MS = 90_000;
 
 export default function Dashboard() {
+  // Hydration guard — wait for client-side mount before rendering store data
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  if (!mounted) {
+    return (
+      <div className="min-h-dvh bg-[#0A0A0F] text-white flex items-center justify-center">
+        <div className="flex items-center gap-3">
+          <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+          <p className="text-sm text-white/40">Starting SpreadSim…</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <DashboardInner />;
+}
+
+function DashboardInner() {
   const runScan = useStore(s => s.runScan);
   const scanning = useStore(s => s.scanning);
   const quotes = useStore(s => s.quotes);

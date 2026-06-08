@@ -256,7 +256,7 @@ export const useStore = create<AppState>()(
       },
     }),
     {
-      name: "spreadbet-v5",
+      name: "spreadbet-v6",
       partialize: (s) => ({
         quotes: s.quotes,
         positions: s.positions,
@@ -266,6 +266,14 @@ export const useStore = create<AppState>()(
         portfolio: s.portfolio,
         tradedToday: s.tradedToday,
       }),
+      onRehydrateStorage: () => {
+        return (_state, error) => {
+          if (error) {
+            console.error("Hydration failed, clearing storage:", error);
+            try { localStorage.removeItem("spreadbet-v6"); } catch { /* */ }
+          }
+        };
+      },
     }
   )
 );
