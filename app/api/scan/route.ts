@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { TRACKED_STOCKS, TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
-import { fetchAllQuotes } from "@/lib/yahoo";
-import { gatherIntelligence } from "@/lib/intelligence";
 import type { StockQuote, AIAnalysis } from "@/lib/types";
-function nanoid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
 function isMarketOpen(): boolean {
   const now = new Date();
@@ -20,40 +19,66 @@ function isMarketOpen(): boolean {
   return totalMins >= 570 && totalMins < 960;
 }
 
-async function analyseWithFullContext(quote: StockQuote, briefing: string): Promise<AIAnalysis | null> {
+// ── Fetch prices directly from Finnhub ───────────────────────────────────────
+
+async function fetchFinnhubQuote(symbol: string): Promise<StockQuote | null> {
+  const key = process.env.FINNHUB_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${key}`);
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (!d.c || d.c === 0) return null;
+    const price = d.c as number;
+    const prev = d.pc as number;
+    const changePct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+    const stock = TRACKED_STOCKS.find(s => s.symbol === symbol);
+    return {
+      symbol,
+      name: stock?.name ?? symbol,
+      price,
+      previousClose: prev,
+      changePercent: Math.round(changePct * 100) / 100,
+      high: d.h as number,
+      low: d.l as number,
+      volume: 0,
+      updatedAt: new Date().toISOString(),
+      marketOpen: isMarketOpen(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── AI Analysis ──────────────────────────────────────────────────────────────
+
+async function analyseStock(quote: StockQuote): Promise<AIAnalysis | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
+
+  // Gather news from RSS feeds
+  let briefing = "No news data available.";
+  try {
+    const { gatherIntelligence } = await import("@/lib/intelligence");
+    const intel = await gatherIntelligence(quote);
+    briefing = intel.briefing;
+  } catch (err) {
+    console.error("Intel gathering failed:", err);
+  }
+
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const direction = quote.changePercent > 0 ? "UP" : "DOWN";
 
-  const prompt = `You are a world-class intraday spread bet trader. A stock in our watchlist has moved significantly. You have been given comprehensive market intelligence — use ALL of it to determine whether this move is real and sustainable, or whether it will reverse.
+  const prompt = `You are a world-class intraday spread bet trader. Analyse this stock move.
 
-══════════════════════════════════════════════
-TRIGGERED STOCK: ${quote.name} (${quote.symbol})
-CURRENT PRICE: $${quote.price.toFixed(2)}
-PREVIOUS CLOSE: $${quote.previousClose.toFixed(2)}
-TODAY'S MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% (${direction})
-DAY RANGE: $${quote.low.toFixed(2)} – $${quote.high.toFixed(2)}
-VOLUME: ${(quote.volume / 1_000_000).toFixed(1)}M shares
-══════════════════════════════════════════════
+STOCK: ${quote.name} (${quote.symbol})
+PRICE: $${quote.price.toFixed(2)} | PREV CLOSE: $${quote.previousClose.toFixed(2)}
+MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% (${direction})
+RANGE: $${quote.low.toFixed(2)} – $${quote.high.toFixed(2)}
 
 ${briefing}
 
-══════════════════════════════════════════════
-YOUR TASK:
-══════════════════════════════════════════════
-
-Analyse this ${Math.abs(quote.changePercent).toFixed(1)}% move using everything above. Consider:
-
-1. NEWS CATALYST — Is there a clear reason? Earnings? Geopolitical? If news-driven, moves tend to sustain.
-2. MACRO ALIGNMENT — Is the broader market confirming or contradicting?
-3. SECTOR CONTEXT — Whole sector moving, or just this stock?
-4. MOMENTUM vs EXHAUSTION — Has the move run its course, or room to extend?
-5. GOVERNMENT/POLICY — Tariffs, regulation, rate decisions?
-6. SPREAD BET MECHANICS — £/point stake, auto-close at +${TAKE_PROFIT_PCT}% or -${STOP_LOSS_PCT}%, intraday only.
-
-Choose: LONG / SHORT / AVOID. Stake: £0.5–£3/pt based on conviction.
-
-Respond with ONLY this JSON:
+Choose LONG / SHORT / AVOID. Stake £0.5–£3/pt. Auto-close at +${TAKE_PROFIT_PCT}% or -${STOP_LOSS_PCT}%.
+Respond ONLY with JSON:
 {"direction":"LONG"|"SHORT"|"AVOID","confidence":0-100,"stakePerPoint":0.5|1|2|3,"reasoning":"3-4 sentences."}`;
 
   try {
@@ -65,9 +90,8 @@ Respond with ONLY this JSON:
     const text = (msg.content[0] as { type: string; text: string }).text
       .replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
     const parsed = JSON.parse(text);
-
     return {
-      id: nanoid(),
+      id: uid(),
       symbol: quote.symbol,
       name: quote.name,
       direction: parsed.direction,
@@ -80,73 +104,58 @@ Respond with ONLY this JSON:
       timestamp: new Date().toISOString(),
     };
   } catch (err) {
-    console.error(`Analysis error for ${quote.symbol}:`, err);
+    console.error(`AI error for ${quote.symbol}:`, err);
     return null;
   }
 }
 
+// ── Main scan endpoint ───────────────────────────────────────────────────────
+
 export async function GET() {
+  const errors: string[] = [];
+  const marketOpen = isMarketOpen();
+  let quotes: StockQuote[] = [];
+  const analyses: AIAnalysis[] = [];
+
+  // 1. Fetch all stock prices from Finnhub (5 at a time)
   try {
-    const marketOpen = isMarketOpen();
-
-    // 1. Fetch ALL 25 stock prices in one batch call (not 25 individual calls)
     const symbols = TRACKED_STOCKS.map(s => s.symbol);
-    const rawQuotes = await fetchAllQuotes(symbols);
-
-    const quotes: StockQuote[] = rawQuotes.map(q => {
-      const stock = TRACKED_STOCKS.find(s => s.symbol === q.symbol);
-      const price = q.regularMarketPrice;
-      const prev = q.regularMarketPreviousClose || price;
-      const changePct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
-      return {
-        symbol: q.symbol,
-        name: stock?.name ?? q.symbol,
-        price,
-        previousClose: prev,
-        changePercent: Math.round(changePct * 100) / 100,
-        high: q.regularMarketDayHigh || price,
-        low: q.regularMarketDayLow || price,
-        volume: q.regularMarketVolume || 0,
-        marketCap: q.marketCap,
-        updatedAt: new Date().toISOString(),
-        marketOpen,
-      };
-    });
-
-    // 2. Find triggered stocks (>3% move)
-    const triggered = quotes.filter(q => Math.abs(q.changePercent) >= TRIGGER_PCT);
-
-    // 3. For each triggered stock: gather FULL intelligence + run AI
-    const analyses: AIAnalysis[] = [];
-
-    if (triggered.length > 0 && process.env.ANTHROPIC_API_KEY) {
-      // Run intelligence gathering + AI analysis sequentially to stay within timeout
-      for (const q of triggered.slice(0, 3)) { // max 3 per scan to stay in budget
-        try {
-          const intel = await gatherIntelligence(q);
-          const analysis = await analyseWithFullContext(q, intel.briefing);
-          if (analysis) {
-            const headlines = intel.stockNews
-              .slice(0, 5)
-              .map(n => n.headline);
-            analysis.newsHeadlines = headlines;
-            analyses.push(analysis);
-          }
-        } catch (err) {
-          console.error(`Intel/analysis failed for ${q.symbol}:`, err);
-        }
+    const batches: string[][] = [];
+    for (let i = 0; i < symbols.length; i += 5) {
+      batches.push(symbols.slice(i, i + 5));
+    }
+    for (const batch of batches) {
+      const results = await Promise.allSettled(batch.map(s => fetchFinnhubQuote(s)));
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) quotes.push(r.value);
       }
     }
-
-    return NextResponse.json({
-      quotes,
-      triggered: triggered.map(q => q.symbol),
-      analyses,
-      marketOpen,
-      scannedAt: new Date().toISOString(),
-    });
   } catch (err) {
-    console.error("Scan error:", err);
-    return NextResponse.json({ error: "Scan failed", detail: String(err) }, { status: 500 });
+    errors.push(`Price fetch: ${String(err)}`);
   }
+
+  // 2. Find triggered stocks
+  const triggered = quotes.filter(q => Math.abs(q.changePercent) >= TRIGGER_PCT);
+
+  // 3. AI analysis for triggered stocks (max 3 to stay in timeout)
+  if (triggered.length > 0 && process.env.ANTHROPIC_API_KEY) {
+    for (const q of triggered.slice(0, 3)) {
+      try {
+        const analysis = await analyseStock(q);
+        if (analysis) analyses.push(analysis);
+      } catch (err) {
+        errors.push(`Analysis ${q.symbol}: ${String(err)}`);
+      }
+    }
+  }
+
+  return NextResponse.json({
+    quotes,
+    triggered: triggered.map(q => q.symbol),
+    analyses,
+    marketOpen,
+    scannedAt: new Date().toISOString(),
+    errors: errors.length > 0 ? errors : undefined,
+    debug: { quotesCount: quotes.length, triggeredCount: triggered.length },
+  });
 }
