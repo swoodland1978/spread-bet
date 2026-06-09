@@ -53,12 +53,38 @@ export async function igLogin(): Promise<IGSession> {
   const securityToken = res.headers.get("X-SECURITY-TOKEN") ?? "";
   const data = await res.json();
 
+  const targetAccountId = process.env.IG_ACCOUNT_ID ?? "";
+
   cachedSession = {
     cst,
     securityToken,
-    accountId: data.currentAccountId ?? process.env.IG_ACCOUNT_ID ?? "",
+    accountId: data.currentAccountId ?? targetAccountId,
     expiresAt: Date.now() + 5 * 60 * 60 * 1000, // 5 hours
   };
+
+  // Switch to the spread betting account if not already on it
+  if (targetAccountId && data.currentAccountId !== targetAccountId) {
+    const switchRes = await fetch(`${IG_DEMO_URL}/session`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json; charset=UTF-8",
+        "X-IG-API-KEY": apiKey,
+        "CST": cst,
+        "X-SECURITY-TOKEN": securityToken,
+        "VERSION": "1",
+      },
+      body: JSON.stringify({ accountId: targetAccountId, defaultAccount: null }),
+    });
+    if (switchRes.ok) {
+      cachedSession.accountId = targetAccountId;
+      // Update tokens if IG returns new ones
+      const newCst = switchRes.headers.get("CST");
+      const newToken = switchRes.headers.get("X-SECURITY-TOKEN");
+      if (newCst) cachedSession.cst = newCst;
+      if (newToken) cachedSession.securityToken = newToken;
+    }
+  }
 
   return cachedSession;
 }
