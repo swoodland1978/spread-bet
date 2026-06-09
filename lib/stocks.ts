@@ -37,13 +37,13 @@ export const TRACKED_STOCKS: TrackedStock[] = [
   { symbol: "INTC",  name: "Intel",           igEpic: "UC.D.INTC.CASH.IP",     igSpread: 0.05 },
   { symbol: "CRM",   name: "Salesforce",      igEpic: "UC.D.CRM.CASH.IP",      igSpread: 0.25 },
 
-  // ── Additional High Volatility (6 new) ──
-  { symbol: "SOFI",  name: "SoFi Technologies", igEpic: "TBD",                  igSpread: 0.25 },
-  { symbol: "MARA",  name: "Marathon Digital",  igEpic: "TBD",                  igSpread: 0.50 },
-  { symbol: "RIOT",  name: "Riot Platforms",    igEpic: "TBD",                  igSpread: 0.50 },
-  { symbol: "DDOG",  name: "Datadog",           igEpic: "TBD",                  igSpread: 0.25 },
-  { symbol: "SNOW",  name: "Snowflake",         igEpic: "TBD",                  igSpread: 0.50 },
-  { symbol: "AVGO",  name: "Broadcom",          igEpic: "TBD",                  igSpread: 0.10 },
+  // ── Additional High Volatility (6 new → 30 total) ──
+  { symbol: "MARA",  name: "MARA Holdings",     igEpic: "UC.D.MARAUS.CASH.IP",  igSpread: 0.50 },
+  { symbol: "RIOT",  name: "Riot Platforms",     igEpic: "UC.D.RIOTUS.CASH.IP",  igSpread: 0.50 },
+  { symbol: "DDOG",  name: "Datadog",            igEpic: "UB.D.DDOGUS.CASH.IP",  igSpread: 0.25 },
+  { symbol: "AVGO",  name: "Broadcom",           igEpic: "UA.D.AVGO.CASH.IP",    igSpread: 0.10 },
+  { symbol: "HOOD",  name: "Robinhood",          igEpic: "UB.D.HOODUS.CASH.IP",  igSpread: 0.25 },
+  { symbol: "ENPH",  name: "Enphase Energy",     igEpic: "UB.D.ENPHUS.CASH.IP",  igSpread: 0.25 },
 ];
 
 export const SYMBOLS = TRACKED_STOCKS.map(s => s.symbol);
@@ -57,7 +57,7 @@ export const STAKE_PER_POINT = 1;  // £ per point default stake
 /**
  * STRATEGY: Mechanical Mean Reversion via IG Demo
  *
- * 1. Poll IG for live prices on all 24 stocks
+ * 1. Poll IG for live prices on all 30 stocks
  * 2. Stock moves 4%+ intraday → auto-trigger
  * 3. FADE the move: UP → SELL, DOWN → BUY
  * 4. Place real spread bet on IG demo via API
