@@ -17,10 +17,15 @@ let cachedSession: IGSession | null = null;
 
 /** Authenticate with IG and get session tokens */
 export async function igLogin(): Promise<IGSession> {
-  // Return cached session if still valid (sessions last ~6 hours)
-  if (cachedSession && cachedSession.expiresAt > Date.now()) {
+  const targetAccountId = process.env.IG_ACCOUNT_ID ?? "";
+
+  // Return cached session if still valid AND on the correct account
+  if (cachedSession && cachedSession.expiresAt > Date.now() && cachedSession.accountId === targetAccountId) {
     return cachedSession;
   }
+
+  // Bust cache if account mismatch
+  cachedSession = null;
 
   const apiKey = process.env.IG_API_KEY;
   const username = process.env.IG_USERNAME;
