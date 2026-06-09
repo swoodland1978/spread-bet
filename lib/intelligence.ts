@@ -38,9 +38,21 @@ const SECTOR_MAP: Record<string, { etf: string; name: string }> = {
   COIN:  { etf: "BITO", name: "Crypto/Blockchain" },
   MSTR:  { etf: "BITO", name: "Crypto/Blockchain" },
   SQ:    { etf: "ARKF", name: "Fintech" },
+  PYPL:  { etf: "ARKF", name: "Fintech" },
   PLTR:  { etf: "ARKK", name: "Innovation/Growth" },
   RIVN:  { etf: "CARZ", name: "EV/Auto" },
+  NIO:   { etf: "CARZ", name: "EV/Auto" },
   BABA:  { etf: "FXI",  name: "China" },
+  UBER:  { etf: "XLY",  name: "Consumer Discretionary" },
+  BA:    { etf: "ITA",  name: "Aerospace & Defense" },
+  INTC:  { etf: "SMH",  name: "Semiconductors" },
+  CRM:   { etf: "XLK",  name: "Technology" },
+  MARA:  { etf: "BITO", name: "Crypto/Blockchain" },
+  RIOT:  { etf: "BITO", name: "Crypto/Blockchain" },
+  DDOG:  { etf: "CLOU", name: "Cloud Computing" },
+  AVGO:  { etf: "SMH",  name: "Semiconductors" },
+  HOOD:  { etf: "ARKF", name: "Fintech" },
+  ENPH:  { etf: "TAN",  name: "Solar/Clean Energy" },
 };
 
 export interface IndexSnapshot {

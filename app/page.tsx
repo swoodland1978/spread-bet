@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import type { StockQuote, TradeReview } from "@/lib/types";
 import { TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
 
@@ -24,22 +24,99 @@ interface IGPosition {
   instrumentName: string;
 }
 
+interface MovementRecord {
+  symbol: string;
+  name: string;
+  changePercent: number;
+  direction: string;
+  price: number;
+  timestamp: string;
+  reason: string;
+  category: string;
+  newsHeadlines: string[];
+  confidence: number;
+  pattern: string;
+}
+
+const STORAGE_KEY = "spreadsim_patterns";
+
+function loadPatterns(): MovementRecord[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function savePatterns(records: MovementRecord[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records.slice(0, 500)));
+  } catch { /* storage full */ }
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  earnings: "bg-blue-500/20 text-blue-400",
+  guidance: "bg-blue-500/20 text-blue-400",
+  analyst: "bg-purple-500/20 text-purple-400",
+  product: "bg-cyan-500/20 text-cyan-400",
+  regulatory: "bg-orange-500/20 text-orange-400",
+  macro: "bg-yellow-500/20 text-yellow-400",
+  sector: "bg-indigo-500/20 text-indigo-400",
+  geopolitical: "bg-red-500/20 text-red-400",
+  crypto: "bg-amber-500/20 text-amber-400",
+  technical: "bg-teal-500/20 text-teal-400",
+  unknown: "bg-white/10 text-white/40",
+};
+
 export default function Dashboard() {
   const [quotes, setQuotes] = useState<StockQuote[]>([]);
   const [igAccount, setIgAccount] = useState<IGAccount | null>(null);
   const [igPositions, setIgPositions] = useState<IGPosition[]>([]);
   const [reviews, setReviews] = useState<TradeReview[]>([]);
+  const [patterns, setPatterns] = useState<MovementRecord[]>([]);
   const [log, setLog] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [marketOpen, setMarketOpen] = useState(false);
   const [lastScan, setLastScan] = useState<string | null>(null);
-  const [tab, setTab] = useState<"live" | "positions" | "reviews">("live");
+  const [tab, setTab] = useState<"live" | "positions" | "patterns" | "reviews">("live");
   const [errors, setErrors] = useState<string[]>([]);
+  const recordedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const loaded = loadPatterns();
+    setPatterns(loaded);
+    loaded.forEach(r => recordedRef.current.add(`${r.symbol}-${r.timestamp.slice(0, 10)}`));
+  }, []);
 
   const addLog = useCallback((msg: string) => {
     setLog(prev => [`${new Date().toLocaleTimeString("en-GB")} ${msg}`, ...prev].slice(0, 80));
   }, []);
+
+  const recordMovement = useCallback(async (quote: StockQuote) => {
+    const dayKey = `${quote.symbol}-${new Date().toISOString().slice(0, 10)}`;
+    if (recordedRef.current.has(dayKey)) return;
+    recordedRef.current.add(dayKey);
+
+    addLog(`Recording why ${quote.symbol} moved ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}%...`);
+
+    try {
+      const res = await fetch("/api/movement-record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quote }),
+      });
+      if (!res.ok) return;
+      const record: MovementRecord = await res.json();
+      setPatterns(prev => {
+        const next = [record, ...prev].slice(0, 500);
+        savePatterns(next);
+        return next;
+      });
+      addLog(`Pattern: ${record.symbol} [${record.category}] — ${record.reason.slice(0, 80)}`);
+    } catch {
+      addLog(`Failed to record ${quote.symbol} movement`);
+    }
+  }, [addLog]);
 
   const scan = useCallback(async () => {
     setScanning(true);
@@ -62,6 +139,18 @@ export default function Dashboard() {
       const triggered: string[] = data.triggered ?? [];
       if (triggered.length > 0) addLog(`Triggered: ${triggered.join(", ")}`);
 
+      for (const symbol of triggered) {
+        const quote = q.find(x => x.symbol === symbol);
+        if (quote) recordMovement(quote);
+      }
+
+      // Also record any stock moving > 3% even if below trigger threshold
+      for (const quote of q) {
+        if (Math.abs(quote.changePercent) >= 3 && !triggered.includes(quote.symbol)) {
+          recordMovement(quote);
+        }
+      }
+
       if (data.igAccount) {
         addLog(`IG Balance: £${data.igAccount.balance.toFixed(2)} | P&L: £${data.igAccount.profitLoss.toFixed(2)}`);
       }
@@ -74,7 +163,7 @@ export default function Dashboard() {
       setLoading(false);
       setScanning(false);
     }
-  }, [addLog]);
+  }, [addLog, recordMovement]);
 
   useEffect(() => {
     scan();
@@ -83,6 +172,14 @@ export default function Dashboard() {
   }, [scan]);
 
   const totalOpenPnl = igPositions.reduce((s, p) => s + p.profitLoss, 0);
+
+  // Pattern stats
+  const categoryCount: Record<string, number> = {};
+  patterns.forEach(p => { categoryCount[p.category] = (categoryCount[p.category] ?? 0) + 1; });
+  const topCategories = Object.entries(categoryCount).sort((a, b) => b[1] - a[1]);
+  const stockCount: Record<string, number> = {};
+  patterns.forEach(p => { stockCount[p.symbol] = (stockCount[p.symbol] ?? 0) + 1; });
+  const mostVolatile = Object.entries(stockCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
   return (
     <div className="min-h-dvh bg-[#0A0A0F] text-white">
@@ -173,6 +270,7 @@ export default function Dashboard() {
           {([
             { key: "live" as const, label: `Live Feed (${quotes.length})` },
             { key: "positions" as const, label: `IG Positions (${igPositions.length})` },
+            { key: "patterns" as const, label: `Patterns (${patterns.length})` },
             { key: "reviews" as const, label: `AI Reviews (${reviews.length})` },
           ]).map(t => (
             <button key={t.key} onClick={() => setTab(t.key)}
@@ -199,9 +297,11 @@ export default function Dashboard() {
                   {quotes.map(q => {
                     const up = q.changePercent >= 0;
                     const trig = Math.abs(q.changePercent) >= TRIGGER_PCT;
+                    const notable = Math.abs(q.changePercent) >= 3;
                     const openPos = igPositions.find(p => p.instrumentName.toLowerCase().includes(q.name.toLowerCase().split(" ")[0]));
+                    const latestPattern = patterns.find(p => p.symbol === q.symbol);
                     return (
-                      <div key={q.symbol} className={`rounded-xl border p-3 ${trig ? "border-yellow-500/60 bg-yellow-500/5" : "border-white/10 bg-white/[0.03]"}`}>
+                      <div key={q.symbol} className={`rounded-xl border p-3 ${trig ? "border-yellow-500/60 bg-yellow-500/5" : notable ? "border-blue-500/30 bg-blue-500/5" : "border-white/10 bg-white/[0.03]"}`}>
                         <div className="flex justify-between items-start">
                           <div>
                             <p className="text-xs font-bold">{q.symbol}</p>
@@ -219,6 +319,14 @@ export default function Dashboard() {
                             <p className={`text-[10px] font-bold ${openPos.profitLoss >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                               {openPos.direction} {openPos.size}u | {openPos.profitLoss >= 0 ? "+" : ""}£{openPos.profitLoss.toFixed(2)}
                             </p>
+                          </div>
+                        )}
+                        {latestPattern && notable && (
+                          <div className="mt-1.5">
+                            <p className="text-[10px] text-white/50 leading-snug">{latestPattern.reason.slice(0, 100)}{latestPattern.reason.length > 100 ? "..." : ""}</p>
+                            <span className={`inline-block text-[9px] px-1.5 py-0.5 rounded mt-1 font-semibold ${CATEGORY_COLORS[latestPattern.category] ?? CATEGORY_COLORS.unknown}`}>
+                              {latestPattern.category}
+                            </span>
                           </div>
                         )}
                         {trig && !openPos && (
@@ -282,6 +390,85 @@ export default function Dashboard() {
               </div>
             ) : (
               <p className="text-white/30 text-sm text-center py-12">No open positions on IG. Trades fire automatically when stocks move &gt;{TRIGGER_PCT}%.</p>
+            )}
+          </div>
+        )}
+
+        {/* PATTERNS */}
+        {tab === "patterns" && (
+          <div className="flex flex-col gap-4">
+            {/* Stats summary */}
+            {patterns.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
+                  <p className="text-[10px] text-white/40 uppercase tracking-widest mb-2">Movements Recorded</p>
+                  <p className="text-3xl font-bold font-mono text-white">{patterns.length}</p>
+                  <p className="text-[10px] text-white/30 mt-1">since {patterns[patterns.length - 1]?.timestamp.slice(0, 10)}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
+                  <p className="text-[10px] text-white/40 uppercase tracking-widest mb-2">Top Catalysts</p>
+                  <div className="flex flex-wrap gap-1">
+                    {topCategories.slice(0, 5).map(([cat, count]) => (
+                      <span key={cat} className={`text-[10px] px-2 py-0.5 rounded font-semibold ${CATEGORY_COLORS[cat] ?? CATEGORY_COLORS.unknown}`}>
+                        {cat} ({count})
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
+                  <p className="text-[10px] text-white/40 uppercase tracking-widest mb-2">Most Volatile</p>
+                  <div className="flex flex-wrap gap-1">
+                    {mostVolatile.map(([sym, count]) => (
+                      <span key={sym} className="text-[10px] px-2 py-0.5 rounded font-semibold bg-white/10 text-white/70">
+                        {sym} ({count}x)
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Pattern list */}
+            {patterns.length > 0 ? patterns.map((r, i) => (
+              <div key={`${r.symbol}-${r.timestamp}-${i}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-bold">{r.symbol}</span>
+                    <span className={`text-xs font-bold ${r.direction === "UP" ? "text-emerald-400" : "text-red-400"}`}>
+                      {r.direction === "UP" ? "+" : ""}{r.changePercent.toFixed(2)}%
+                    </span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${CATEGORY_COLORS[r.category] ?? CATEGORY_COLORS.unknown}`}>
+                      {r.category}
+                    </span>
+                    {r.confidence > 0 && (
+                      <span className="text-[10px] text-white/30">conf: {r.confidence}/10</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-white/30 shrink-0">{new Date(r.timestamp).toLocaleDateString("en-GB")} {new Date(r.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+
+                <div className="rounded-lg bg-white/[0.03] p-3 mb-2">
+                  <p className="text-[10px] text-white/40 uppercase mb-1">Why it moved</p>
+                  <p className="text-xs text-white/70 leading-relaxed">{r.reason}</p>
+                </div>
+
+                {r.pattern && (
+                  <div className="rounded-lg bg-yellow-500/5 border border-yellow-500/10 p-2">
+                    <p className="text-[10px] text-yellow-400/80 font-semibold">Pattern: {r.pattern}</p>
+                  </div>
+                )}
+
+                {r.newsHeadlines.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-[10px] text-white/30 mb-1">Key Headlines</p>
+                    {r.newsHeadlines.map((h, j) => (
+                      <p key={j} className="text-[10px] text-white/50 leading-relaxed">• {h}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )) : (
+              <p className="text-white/30 text-sm text-center py-12">No patterns recorded yet. Movements &gt;3% are automatically analysed and stored here.</p>
             )}
           </div>
         )}
