@@ -58,8 +58,6 @@ export async function igLogin(): Promise<IGSession> {
   const securityToken = res.headers.get("X-SECURITY-TOKEN") ?? "";
   const data = await res.json();
 
-  const targetAccountId = process.env.IG_ACCOUNT_ID ?? "";
-
   cachedSession = {
     cst,
     securityToken,
