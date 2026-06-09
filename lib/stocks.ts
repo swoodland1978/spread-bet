@@ -48,20 +48,20 @@ export const TRACKED_STOCKS: TrackedStock[] = [
 
 export const SYMBOLS = TRACKED_STOCKS.map(s => s.symbol);
 
-export const TRIGGER_PCT = 4;      // % move that triggers trade
+export const TRIGGER_PCT = 5;      // % move that triggers trade (raised from 4% to reduce noise + save tokens)
 export const TAKE_PROFIT_PCT = 1;  // % gain to auto-close (quick scalp)
 export const STOP_LOSS_PCT = 2;    // % loss to auto-close (2:1 risk:reward, need 67% win rate)
 export const STARTING_BANKROLL = 10_000; // £
 export const STAKE_PER_POINT = 1;  // £ per point default stake
 
 /**
- * STRATEGY: Mechanical Mean Reversion via IG Demo
+ * STRATEGY: AI-Assisted Mean Reversion via IG Demo
  *
- * 1. Poll IG for live prices on all 30 stocks
- * 2. Stock moves 4%+ intraday → auto-trigger
- * 3. FADE the move: UP → SELL, DOWN → BUY
- * 4. Place real spread bet on IG demo via API
- * 5. IG handles execution, spreads, P&L
- * 6. Take profit at +1% / Stop loss at -2%
- * 7. AI reviews every closed trade → builds playbook
+ * 1. Poll IG for live prices on all 30 stocks every 90s
+ * 2. Stock moves 5%+ intraday → trigger
+ * 3. Gather intelligence (news, macro, sector, indices)
+ * 4. Claude Haiku decides BUY / SELL / AVOID
+ * 5. If not AVOID → igOpenPosition() places real spread bet on IG demo
+ * 6. Each scan: check open positions → close at +1% TP or -2% SL via igClosePosition()
+ * 7. AI reviews every closed trade → builds playbook for future decisions
  */

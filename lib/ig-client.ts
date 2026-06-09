@@ -193,27 +193,17 @@ export async function igOpenPosition(params: {
 export async function igClosePosition(dealId: string, direction: "BUY" | "SELL", size: number): Promise<{ success: boolean; reason?: string }> {
   // IG uses the opposite direction to close
   const closeDirection = direction === "BUY" ? "SELL" : "BUY";
+  const session = await igLogin();
 
-  const res = await igFetch("/positions/otc", {
-    method: "POST", // IG uses POST with _method=DELETE header for closes
-    version: "1",
-    body: {
-      dealId,
-      direction: closeDirection,
-      size,
-      orderType: "MARKET",
-    },
-  });
-
-  // For closing, IG requires DELETE method via special header
-  const deleteRes = await fetch(`${IG_DEMO_URL}/positions/otc`, {
-    method: "DELETE",
+  // IG REST API requires POST with _method=DELETE header to close positions
+  const res = await fetch(`${IG_DEMO_URL}/positions/otc`, {
+    method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Accept": "application/json; charset=UTF-8",
       "X-IG-API-KEY": process.env.IG_API_KEY!,
-      "CST": (await igLogin()).cst,
-      "X-SECURITY-TOKEN": (await igLogin()).securityToken,
+      "CST": session.cst,
+      "X-SECURITY-TOKEN": session.securityToken,
       "VERSION": "1",
       "_method": "DELETE",
     },
@@ -225,12 +215,29 @@ export async function igClosePosition(dealId: string, direction: "BUY" | "SELL",
     }),
   });
 
-  if (deleteRes.ok) {
-    const data = await deleteRes.json();
-    return { success: true, reason: data.dealReference };
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    return { success: false, reason: `HTTP ${res.status}: ${errText}` };
   }
 
-  return { success: false, reason: `HTTP ${deleteRes.status}` };
+  const data = await res.json();
+  const dealRef = data.dealReference;
+
+  // Confirm the close
+  if (dealRef) {
+    try {
+      const confirmRes = await igFetch(`/confirms/${dealRef}`);
+      if (confirmRes.ok) {
+        const confirm = await confirmRes.json();
+        if (confirm.dealStatus === "ACCEPTED") {
+          return { success: true, reason: `Closed: ${confirm.dealId}` };
+        }
+        return { success: false, reason: confirm.reason ?? "Rejected" };
+      }
+    } catch { /* fall through */ }
+  }
+
+  return { success: true, reason: dealRef ?? "unknown" };
 }
 
 // ── Account Info ─────────────────────────────────────────────────────────────

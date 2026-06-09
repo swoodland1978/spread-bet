@@ -1,12 +1,26 @@
 import { NextResponse } from "next/server";
-import { igLogin, igGetAccount, igGetPositions } from "@/lib/ig-client";
-import { TRACKED_STOCKS, TRIGGER_PCT } from "@/lib/stocks";
+import { igLogin, igGetAccount, igGetPositions, igOpenPosition, igClosePosition } from "@/lib/ig-client";
+import { TRACKED_STOCKS, TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT, STAKE_PER_POINT } from "@/lib/stocks";
+import { gatherIntelligence } from "@/lib/intelligence";
+import Anthropic from "@anthropic-ai/sdk";
 import type { StockQuote } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const IG_DEMO_URL = "https://demo-api.ig.com/gateway/deal";
+
+// Track which stocks we already traded today (survives within same serverless instance)
+const tradedToday = new Set<string>();
+let lastTradedDate = "";
+
+function resetIfNewDay() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== lastTradedDate) {
+    tradedToday.clear();
+    lastTradedDate = today;
+  }
+}
 
 function isMarketOpen(): boolean {
   const now = new Date();
@@ -19,7 +33,6 @@ function isMarketOpen(): boolean {
   return totalMins >= 570 && totalMins < 960;
 }
 
-/** Fetch prices from IG for a specific EPIC */
 async function fetchIGPrice(epic: string, session: { cst: string; securityToken: string }): Promise<{ bid: number; offer: number; percentageChange: number; high: number; low: number } | null> {
   try {
     const res = await fetch(`${IG_DEMO_URL}/markets/${epic}`, {
@@ -47,10 +60,78 @@ async function fetchIGPrice(epic: string, session: { cst: string; securityToken:
   }
 }
 
+/** Ask Claude Haiku whether to trade */
+async function aiDecide(quote: StockQuote, briefing: string): Promise<{ direction: "BUY" | "SELL" | "AVOID"; reasoning: string; confidence: number }> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    // Fallback: mechanical fade
+    const dir = quote.changePercent > 0 ? "SELL" : "BUY";
+    return { direction: dir, reasoning: `Mechanical fade: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% move`, confidence: 5 };
+  }
+
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const prompt = `You are a spread-betting AI. A stock just moved over 5% and we need to decide whether to trade.
+
+STOCK: ${quote.symbol} (${quote.name})
+MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% today (price: $${quote.price.toFixed(2)})
+
+MARKET INTELLIGENCE:
+${briefing}
+
+STRATEGY: We fade big moves (mean reversion). If a stock is UP big, we SELL expecting it to pull back. If DOWN big, we BUY expecting a bounce. Take profit at +1%, stop loss at -2%.
+
+But we should AVOID if the move is justified by fundamental news (genuine earnings surprise, FDA approval/rejection, major acquisition, bankruptcy risk) where reversal is unlikely.
+
+Respond with ONLY this JSON:
+{
+  "direction": "BUY" or "SELL" or "AVOID",
+  "reasoning": "1-2 sentences explaining your decision",
+  "confidence": 1-10
+}`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 200,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = (msg.content[0] as { type: string; text: string }).text
+      .replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
+    return JSON.parse(text);
+  } catch {
+    // Fallback: mechanical fade
+    const dir = quote.changePercent > 0 ? "SELL" : "BUY";
+    return { direction: dir, reasoning: "AI unavailable, mechanical fade", confidence: 3 };
+  }
+}
+
+interface TradeAction {
+  symbol: string;
+  epic: string;
+  direction: "BUY" | "SELL" | "AVOID";
+  reasoning: string;
+  confidence: number;
+  dealId?: string;
+  dealStatus?: string;
+  error?: string;
+}
+
+interface CloseAction {
+  symbol: string;
+  dealId: string;
+  reason: "take_profit" | "stop_loss";
+  pnlPercent: number;
+  success: boolean;
+  error?: string;
+}
+
 export async function GET() {
   const errors: string[] = [];
   const marketOpen = isMarketOpen();
-  const quotes: StockQuote[] = [];
+  const quotes: (StockQuote & { igEpic: string; bid: number; offer: number })[] = [];
+  const trades: TradeAction[] = [];
+  const closes: CloseAction[] = [];
+
+  resetIfNewDay();
 
   try {
     // 1. Login to IG
@@ -83,7 +164,7 @@ export async function GET() {
             igEpic: stock.igEpic,
             bid: price.bid,
             offer: price.offer,
-          } as StockQuote & { igEpic: string; bid: number; offer: number };
+          };
         })
       );
       for (const r of results) {
@@ -91,22 +172,132 @@ export async function GET() {
       }
     }
 
-    // 3. Get IG account balance
+    // 3. Get IG account balance + open positions
     const account = await igGetAccount();
-
-    // 4. Get IG open positions
     const igPositions = await igGetPositions();
 
-    // 5. Find triggered stocks
+    // 4. Find triggered stocks (5%+ move)
     const triggered = quotes.filter(q => Math.abs(q.changePercent) >= TRIGGER_PCT);
+
+    // 5. CHECK OPEN POSITIONS — auto-close at TP/SL
+    for (const pos of igPositions) {
+      // Find matching quote by epic
+      const quote = quotes.find(q => q.igEpic === pos.epic);
+      if (!quote) continue;
+
+      // Calculate P&L percent from entry
+      const entryPrice = pos.level;
+      const currentPrice = pos.direction === "BUY" ? quote.bid : quote.offer;
+      const pnlPct = pos.direction === "BUY"
+        ? ((currentPrice - entryPrice) / entryPrice) * 100
+        : ((entryPrice - currentPrice) / entryPrice) * 100;
+
+      let closeReason: "take_profit" | "stop_loss" | null = null;
+      if (pnlPct >= TAKE_PROFIT_PCT) closeReason = "take_profit";
+      if (pnlPct <= -STOP_LOSS_PCT) closeReason = "stop_loss";
+
+      if (closeReason) {
+        try {
+          const result = await igClosePosition(pos.dealId, pos.direction as "BUY" | "SELL", pos.size);
+          closes.push({
+            symbol: quote.symbol,
+            dealId: pos.dealId,
+            reason: closeReason,
+            pnlPercent: Math.round(pnlPct * 100) / 100,
+            success: result.success,
+            error: result.success ? undefined : result.reason,
+          });
+        } catch (err) {
+          closes.push({
+            symbol: quote.symbol,
+            dealId: pos.dealId,
+            reason: closeReason,
+            pnlPercent: Math.round(pnlPct * 100) / 100,
+            success: false,
+            error: String(err),
+          });
+        }
+      }
+    }
+
+    // 6. OPEN NEW POSITIONS for triggered stocks
+    for (const quote of triggered) {
+      const stock = TRACKED_STOCKS.find(s => s.symbol === quote.symbol);
+      if (!stock) continue;
+
+      // Skip if already traded today
+      if (tradedToday.has(quote.symbol)) continue;
+
+      // Skip if we already have an open position on this stock
+      if (igPositions.some(p => p.epic === stock.igEpic)) continue;
+
+      // Gather intelligence and ask AI
+      let briefing = "";
+      try {
+        const intel = await gatherIntelligence(quote);
+        briefing = intel.briefing;
+      } catch {
+        briefing = "Intelligence gathering failed.";
+      }
+
+      const decision = await aiDecide(quote, briefing);
+
+      if (decision.direction === "AVOID") {
+        trades.push({
+          symbol: quote.symbol,
+          epic: stock.igEpic,
+          direction: "AVOID",
+          reasoning: decision.reasoning,
+          confidence: decision.confidence,
+        });
+        tradedToday.add(quote.symbol); // Don't re-analyse today
+        continue;
+      }
+
+      // Place the trade on IG
+      try {
+        const result = await igOpenPosition({
+          epic: stock.igEpic,
+          direction: decision.direction,
+          size: STAKE_PER_POINT,
+          expiry: "-", // Cash/24-hour markets use "-" not "DFB"
+        });
+
+        trades.push({
+          symbol: quote.symbol,
+          epic: stock.igEpic,
+          direction: decision.direction,
+          reasoning: decision.reasoning,
+          confidence: decision.confidence,
+          dealId: result.dealId,
+          dealStatus: result.dealStatus,
+        });
+        tradedToday.add(quote.symbol);
+      } catch (err) {
+        trades.push({
+          symbol: quote.symbol,
+          epic: stock.igEpic,
+          direction: decision.direction,
+          reasoning: decision.reasoning,
+          confidence: decision.confidence,
+          error: String(err),
+        });
+      }
+    }
+
+    // 7. Re-fetch positions after trades/closes
+    const updatedPositions = (trades.length > 0 || closes.length > 0) ? await igGetPositions() : igPositions;
+    const updatedAccount = (trades.length > 0 || closes.length > 0) ? await igGetAccount() : account;
 
     return NextResponse.json({
       quotes,
       triggered: triggered.map(q => q.symbol),
+      trades,
+      closes,
       marketOpen,
       scannedAt: new Date().toISOString(),
-      igAccount: account,
-      igPositions,
+      igAccount: updatedAccount,
+      igPositions: updatedPositions,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
@@ -114,6 +305,8 @@ export async function GET() {
     return NextResponse.json({
       quotes,
       triggered: [],
+      trades: [],
+      closes: [],
       marketOpen,
       scannedAt: new Date().toISOString(),
       errors,

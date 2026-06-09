@@ -151,11 +151,31 @@ export default function Dashboard() {
         }
       }
 
-      if (data.igAccount) {
-        addLog(`IG Balance: £${data.igAccount.balance.toFixed(2)} | P&L: £${data.igAccount.profitLoss.toFixed(2)}`);
+      // Log trade actions from the scan
+      const tradeActions = data.trades ?? [];
+      for (const t of tradeActions) {
+        if (t.direction === "AVOID") {
+          addLog(`AVOID ${t.symbol} — ${t.reasoning}`);
+        } else if (t.dealId) {
+          addLog(`${t.direction} ${t.symbol} on IG (deal: ${t.dealId}) — ${t.reasoning}`);
+        } else if (t.error) {
+          addLog(`FAILED ${t.direction} ${t.symbol}: ${t.error}`);
+        }
       }
-      if (data.igPositions?.length > 0) {
-        addLog(`IG Positions: ${data.igPositions.length} open`);
+
+      // Log close actions
+      const closeActions = data.closes ?? [];
+      for (const c of closeActions) {
+        const label = c.reason === "take_profit" ? "+1% TAKE PROFIT" : "-2% STOP LOSS";
+        if (c.success) {
+          addLog(`CLOSED ${c.symbol} ${label} (${c.pnlPercent > 0 ? "+" : ""}${c.pnlPercent.toFixed(2)}%)`);
+        } else {
+          addLog(`CLOSE FAILED ${c.symbol}: ${c.error}`);
+        }
+      }
+
+      if (data.igAccount) {
+        addLog(`IG: £${data.igAccount.balance.toFixed(2)} bal | £${data.igAccount.profitLoss.toFixed(2)} P&L | ${data.igPositions?.length ?? 0} positions`);
       }
     } catch (err) {
       addLog(`${err instanceof Error ? err.message : "Scan failed"}`);
