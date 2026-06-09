@@ -20,7 +20,7 @@ export const TRACKED_STOCKS: TrackedStock[] = [
   { symbol: "SHOP",  name: "Shopify",         igSpread: 0.25 },
   { symbol: "RIVN",  name: "Rivian",          igSpread: 0.05 },
   { symbol: "SNAP",  name: "Snap",            igSpread: 0.05 },
-  { symbol: "SPOT",  name: "Spotify",         igSpread: 0.50 },
+
   { symbol: "ABNB",  name: "Airbnb",          igSpread: 0.50 },
   { symbol: "RDDT",  name: "Reddit",          igSpread: 0.25 },
   { symbol: "MSTR",  name: "MicroStrategy",   igSpread: 1.00 },
