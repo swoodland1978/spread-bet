@@ -69,7 +69,7 @@ async function aiDecide(quote: StockQuote, briefing: string): Promise<{ directio
   }
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const prompt = `You are a spread-betting AI. A stock just moved over 5% and we need to decide whether to trade.
+  const prompt = `You are a spread-betting AI. A stock just made a massive single-day move (7%+). We need to decide: is this stock going to turn around, or is the move justified?
 
 STOCK: ${quote.symbol} (${quote.name})
 MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% today (price: $${quote.price.toFixed(2)})
@@ -77,14 +77,18 @@ MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% to
 MARKET INTELLIGENCE:
 ${briefing}
 
-STRATEGY: We fade big moves (mean reversion). If a stock is UP big, we SELL expecting it to pull back. If DOWN big, we BUY expecting a bounce. Take profit at +1%, stop loss at -2%.
+YOUR JOB: Analyse the news and context. Decide if this 7%+ move is an OVERREACTION that will reverse, or a JUSTIFIED move that will continue.
 
-But we should AVOID if the move is justified by fundamental news (genuine earnings surprise, FDA approval/rejection, major acquisition, bankruptcy risk) where reversal is unlikely.
+- If DOWN 7%+ and you think it will BOUNCE BACK → BUY
+- If UP 7%+ and you think it will PULL BACK → SELL
+- If the move is justified (real earnings shock, regulatory action, bankruptcy risk, genuine paradigm shift) → AVOID
+
+We take profit at +1% and stop loss at -4%. So we only need a small reversal to win, but we lose big if wrong. Only trade when you're genuinely confident the move is overdone.
 
 Respond with ONLY this JSON:
 {
   "direction": "BUY" or "SELL" or "AVOID",
-  "reasoning": "1-2 sentences explaining your decision",
+  "reasoning": "1-2 sentences: why will this stock turn around, or why is the move justified?",
   "confidence": 1-10
 }`;
 
@@ -137,14 +141,14 @@ export async function GET() {
     // 1. Login to IG
     const session = await igLogin();
 
-    // 2. Fetch prices for all stocks from IG (3 at a time with delay)
+    // 2. Fetch prices for all stocks from IG (2 at a time with 500ms delay to respect rate limits)
     const batches: typeof TRACKED_STOCKS[number][][] = [];
-    for (let i = 0; i < TRACKED_STOCKS.length; i += 3) {
-      batches.push(TRACKED_STOCKS.slice(i, i + 3));
+    for (let i = 0; i < TRACKED_STOCKS.length; i += 2) {
+      batches.push(TRACKED_STOCKS.slice(i, i + 2));
     }
 
     for (let i = 0; i < batches.length; i++) {
-      if (i > 0) await new Promise(r => setTimeout(r, 300));
+      if (i > 0) await new Promise(r => setTimeout(r, 500));
       const results = await Promise.allSettled(
         batches[i].map(async (stock) => {
           const price = await fetchIGPrice(stock.igEpic, session);

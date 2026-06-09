@@ -35,23 +35,29 @@ export async function igLogin(): Promise<IGSession> {
     throw new Error("IG credentials not configured");
   }
 
-  const res = await fetch(`${IG_DEMO_URL}/session`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json; charset=UTF-8",
-      "X-IG-API-KEY": apiKey,
-      "VERSION": "2",
-    },
-    body: JSON.stringify({
-      identifier: username,
-      password: password,
-    }),
-  });
+  // Retry login up to 2 times with delay (handles rate limiting)
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 2000 * attempt));
+    res = await fetch(`${IG_DEMO_URL}/session`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json; charset=UTF-8",
+        "X-IG-API-KEY": apiKey,
+        "VERSION": "2",
+      },
+      body: JSON.stringify({
+        identifier: username,
+        password: password,
+      }),
+    });
+    if (res.ok || res.status !== 403) break; // only retry on rate limit (403)
+  }
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`IG login failed (${res.status}): ${err}`);
+  if (!res || !res.ok) {
+    const err = res ? await res.text() : "No response";
+    throw new Error(`IG login failed (${res?.status}): ${err}`);
   }
 
   const cst = res.headers.get("CST") ?? "";

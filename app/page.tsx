@@ -144,9 +144,9 @@ export default function Dashboard() {
         if (quote) recordMovement(quote);
       }
 
-      // Also record any stock moving > 3% even if below trigger threshold
+      // Also record any stock moving > 5% even if below trigger threshold
       for (const quote of q) {
-        if (Math.abs(quote.changePercent) >= 3 && !triggered.includes(quote.symbol)) {
+        if (Math.abs(quote.changePercent) >= 5 && !triggered.includes(quote.symbol)) {
           recordMovement(quote);
         }
       }
@@ -187,7 +187,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     scan();
-    const id = setInterval(scan, 90_000);
+    const id = setInterval(scan, 180_000);
     return () => clearInterval(id);
   }, [scan]);
 
@@ -260,7 +260,7 @@ export default function Dashboard() {
               <div>
                 <p className="text-[10px] text-white/40 uppercase tracking-widest mb-1">Last Scan</p>
                 <p className="text-lg font-mono text-white/60">{lastScan ?? "—"}</p>
-                <p className="text-[10px] text-white/20">every 90s</p>
+                <p className="text-[10px] text-white/20">every 3 min</p>
               </div>
             </div>
           ) : (
