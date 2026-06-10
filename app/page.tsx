@@ -3,7 +3,10 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { StockQuote, TradeReview } from "@/lib/types";
 import { TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
-import { useIGStream } from "@/lib/useIGStream";
+import dynamic from "next/dynamic";
+import type { StreamPriceMap } from "@/lib/useIGStream";
+
+const IGStreamProvider = dynamic(() => import("./IGStreamProvider"), { ssr: false });
 
 interface IGAccount {
   accountId: string;
@@ -69,7 +72,13 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Dashboard() {
-  const { prices: streamPrices, connected: streamConnected, error: streamError } = useIGStream();
+  const [streamPrices, setStreamPrices] = useState<StreamPriceMap>({});
+  const [streamConnected, setStreamConnected] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const handleStreamStatus = useCallback((connected: boolean, error: string | null) => {
+    setStreamConnected(connected);
+    setStreamError(error);
+  }, []);
   const [quotes, setQuotes] = useState<StockQuote[]>([]);
   const [igAccount, setIgAccount] = useState<IGAccount | null>(null);
   const [igPositions, setIgPositions] = useState<IGPosition[]>([]);
@@ -326,6 +335,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-dvh bg-[#0A0A0F] text-white">
+      <IGStreamProvider onPrices={setStreamPrices} onStatus={handleStreamStatus} />
       {/* HEADER */}
       <header className="border-b border-white/10 px-4 py-3 flex items-center justify-between sticky top-0 bg-[#0A0A0F]/95 backdrop-blur z-10">
         <div>
