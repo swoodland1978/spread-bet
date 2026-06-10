@@ -214,97 +214,51 @@ export default function Dashboard() {
 
   const [nextOpen, setNextOpen] = useState<string | null>(null);
 
+  // Initial scan on mount
   useEffect(() => {
-    // Returns ms until next NYSE open (9:30 AM ET), accounting for DST
-    function msUntilNextOpen(): number {
-      const now = new Date();
-      // ET offset: UTC-5 (EST) or UTC-4 (EDT)
-      // EDT runs second Sunday March → first Sunday November
-      function etOffset(d: Date): number {
-        const year = d.getUTCFullYear();
-        const dstStart = new Date(Date.UTC(year, 2, 8)); // March 8 (latest possible 2nd Sunday)
-        dstStart.setUTCDate(8 + (7 - dstStart.getUTCDay()) % 7); // 2nd Sunday
-        const dstEnd = new Date(Date.UTC(year, 10, 1)); // Nov 1
-        dstEnd.setUTCDate(1 + (7 - dstEnd.getUTCDay()) % 7); // 1st Sunday
-        return d >= dstStart && d < dstEnd ? -4 : -5;
-      }
-      const offsetHours = etOffset(now);
-      const etNow = new Date(now.getTime() + offsetHours * 3_600_000);
-      const day = etNow.getUTCDay(); // 0=Sun, 6=Sat
-      const h = etNow.getUTCHours(), m = etNow.getUTCMinutes();
-      const minsSinceMidnight = h * 60 + m;
-      const openMins = 9 * 60 + 30;
-      const closeMins = 16 * 60;
-
-      // If market is currently open, no wait needed
-      if (day >= 1 && day <= 5 && minsSinceMidnight >= openMins && minsSinceMidnight < closeMins) return 0;
-
-      // Find next weekday 9:30 AM ET
-      let daysAhead = 0;
-      let candidate = new Date(etNow);
-      // If today is a weekday but before open, open is today
-      if (day >= 1 && day <= 5 && minsSinceMidnight < openMins) {
-        daysAhead = 0;
-      } else {
-        // Move to next day
-        daysAhead = 1;
-        candidate = new Date(etNow.getTime() + 86_400_000);
-        // Skip weekend
-        while (candidate.getUTCDay() === 0 || candidate.getUTCDay() === 6) {
-          daysAhead++;
-          candidate = new Date(etNow.getTime() + daysAhead * 86_400_000);
-        }
-      }
-      const nextOpenET = new Date(Date.UTC(
-        candidate.getUTCFullYear(), candidate.getUTCMonth(), candidate.getUTCDate(),
-        9, 30, 0
-      ));
-      // Convert back to UTC
-      const nextOpenUTC = new Date(nextOpenET.getTime() - offsetHours * 3_600_000);
-      return Math.max(0, nextOpenUTC.getTime() - now.getTime());
-    }
-
-    let scanInterval: ReturnType<typeof setInterval> | null = null;
-    let wakeTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    function startScanning() {
-      scan();
-      scanInterval = setInterval(scan, 180_000);
-      setNextOpen(null);
-    }
-
-    function scheduleWakeup() {
-      const ms = msUntilNextOpen();
-      if (ms === 0) {
-        startScanning();
-        return;
-      }
-      const opensAt = new Date(Date.now() + ms);
-      setNextOpen(opensAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZoneName: "short" }));
-      addLog(`Market closed. Sleeping until ${opensAt.toLocaleTimeString("en-GB")} (${Math.round(ms / 60_000)}min)`);
-      wakeTimeout = setTimeout(() => {
-        addLog("NYSE opening — starting scans");
-        startScanning();
-      }, ms);
-    }
-
-    // Do one scan to get initial state, then decide whether to keep scanning or sleep
-    scan().then(() => {
-      setMarketOpen(prev => {
-        if (!prev) scheduleWakeup();
-        else {
-          scanInterval = setInterval(scan, 180_000);
-        }
-        return prev;
-      });
-    });
-
-    return () => {
-      if (scanInterval) clearInterval(scanInterval);
-      if (wakeTimeout) clearTimeout(wakeTimeout);
-    };
+    scan();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Once we know market state, set up the right interval
+  useEffect(() => {
+    if (loading) return; // wait until first scan completes
+
+    if (marketOpen) {
+      setNextOpen(null);
+      const id = setInterval(scan, 180_000);
+      return () => clearInterval(id);
+    } else {
+      // Calculate ms until next NYSE open (9:30 AM ET)
+      const now = new Date();
+      const year = now.getUTCFullYear();
+      const dstStart = new Date(Date.UTC(year, 2, 8));
+      dstStart.setUTCDate(8 + (7 - dstStart.getUTCDay()) % 7);
+      const dstEnd = new Date(Date.UTC(year, 10, 1));
+      dstEnd.setUTCDate(1 + (7 - dstEnd.getUTCDay()) % 7);
+      const offsetHours = now >= dstStart && now < dstEnd ? -4 : -5;
+      const etNow = new Date(now.getTime() + offsetHours * 3_600_000);
+      const day = etNow.getUTCDay();
+      const mins = etNow.getUTCHours() * 60 + etNow.getUTCMinutes();
+
+      let daysAhead = (day === 0 || day === 6 || mins >= 960) ? 1 : 0;
+      let candidate = new Date(etNow.getTime() + daysAhead * 86_400_000);
+      while (candidate.getUTCDay() === 0 || candidate.getUTCDay() === 6) {
+        daysAhead++;
+        candidate = new Date(etNow.getTime() + daysAhead * 86_400_000);
+      }
+      const nextOpenET = new Date(Date.UTC(candidate.getUTCFullYear(), candidate.getUTCMonth(), candidate.getUTCDate(), 9, 30, 0));
+      const nextOpenUTC = new Date(nextOpenET.getTime() - offsetHours * 3_600_000);
+      const ms = Math.max(60_000, nextOpenUTC.getTime() - now.getTime());
+
+      setNextOpen(nextOpenUTC.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZoneName: "short" }));
+      addLog(`Market closed. Next open ${nextOpenUTC.toLocaleTimeString("en-GB")} (${Math.round(ms / 60_000)}min)`);
+
+      const id = setTimeout(() => { scan(); }, ms);
+      return () => clearTimeout(id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketOpen, loading]);
 
   const liveQuotes = quotes;
 
