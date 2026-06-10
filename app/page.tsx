@@ -74,7 +74,7 @@ export default function Dashboard() {
   const [reviews, setReviews] = useState<TradeReview[]>([]);
   const [patterns, setPatterns] = useState<MovementRecord[]>([]);
   const [log, setLog] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [marketOpen, setMarketOpen] = useState(false);
   const [lastScan, setLastScan] = useState<string | null>(null);
@@ -122,7 +122,10 @@ export default function Dashboard() {
   const scan = useCallback(async () => {
     setScanning(true);
     try {
-      const res = await fetch("/api/scan", { cache: "no-store" });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      const res = await fetch("/api/scan", { cache: "no-store", signal: controller.signal });
+      clearTimeout(timeout);
       if (!res.ok) { addLog(`Scan error: HTTP ${res.status}`); return; }
       const data = await res.json();
 
