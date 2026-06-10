@@ -29,8 +29,13 @@ export function useIGStream() {
 
     try {
       const res = await fetch("/api/ig-stream-credentials");
-      if (!res.ok) throw new Error(`Credentials fetch failed: ${res.status}`);
-      const { cst, securityToken, accountId, lightstreamerEndpoint } = await res.json();
+      if (!res.ok) {
+        setError(`Stream credentials unavailable (${res.status})`);
+        return;
+      }
+      const { cst, securityToken, accountId, lightstreamerEndpoint, error: credError } = await res.json();
+      if (credError) { setError(`Stream: ${credError}`); return; }
+      if (!cst || !securityToken) { setError("Stream: missing session tokens"); return; }
 
       if (clientRef.current) {
         clientRef.current.disconnect();
@@ -91,9 +96,11 @@ export function useIGStream() {
   }, []);
 
   useEffect(() => {
-    connect();
+    // Only run in browser — never during SSR
+    if (typeof window === "undefined") return;
+    connect().catch(err => setError(String(err)));
     return () => {
-      clientRef.current?.disconnect();
+      try { clientRef.current?.disconnect(); } catch { /* ignore */ }
     };
   }, [connect]);
 
