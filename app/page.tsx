@@ -68,8 +68,6 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Dashboard() {
-  const streamConnected = false;
-  const streamError: string | null = null;
   const [quotes, setQuotes] = useState<StockQuote[]>([]);
   const [igAccount, setIgAccount] = useState<IGAccount | null>(null);
   const [igPositions, setIgPositions] = useState<IGPosition[]>([]);
@@ -284,9 +282,6 @@ export default function Dashboard() {
           <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${marketOpen ? "bg-emerald-500/20 text-emerald-400" : "bg-white/10 text-white/30"}`}>
             {marketOpen ? "NYSE Open" : nextOpen ? `Sleeping — opens ${nextOpen}` : "NYSE Closed"}
           </span>
-          <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${streamConnected ? "bg-blue-500/20 text-blue-400" : "bg-white/10 text-white/30"}`}>
-            {streamConnected ? "Live" : "Connecting..."}
-          </span>
           {scanning && <div className="w-3 h-3 border-2 border-white/20 border-t-emerald-400 rounded-full animate-spin" />}
           <button onClick={scan} disabled={scanning}
             className="text-[10px] text-white/40 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 hover:border-white/30 transition-colors disabled:opacity-30 font-semibold">
@@ -350,10 +345,9 @@ export default function Dashboard() {
             </div>
           )}
         </div>
-        {(errors.length > 0 || streamError) && (
+        {errors.length > 0 && (
           <div className="mt-2 rounded-xl border border-red-500/30 bg-red-500/5 p-3">
             <p className="text-[10px] text-red-400 uppercase tracking-widest mb-1">Errors</p>
-            {streamError && <p className="text-xs text-red-400/70">Stream: {streamError}</p>}
             {errors.map((e, i) => <p key={i} className="text-xs text-red-400/70">{e}</p>)}
           </div>
         )}
