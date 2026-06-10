@@ -48,7 +48,7 @@ export const TRACKED_STOCKS: TrackedStock[] = [
 
 export const SYMBOLS = TRACKED_STOCKS.map(s => s.symbol);
 
-export const TRIGGER_PCT = 7;      // % single-day move that triggers intelligence gathering + AI decision
+export const TRIGGER_PCT = 5;      // % single-day move that triggers intelligence gathering + AI decision
 export const TAKE_PROFIT_PCT = 4;  // % gain to auto-close
 export const STOP_LOSS_PCT = 2;    // % loss to auto-close (2:1 reward:risk, break even at 33% win rate)
 export const TIME_STOP_HOURS = 24; // close position after this many hours regardless of P&L

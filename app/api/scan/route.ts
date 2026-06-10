@@ -72,7 +72,7 @@ async function aiDecide(quote: StockQuote, briefing: string): Promise<{ directio
   }
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const prompt = `You are a spread-betting AI. A stock just made a massive single-day move (7%+). We need to decide: is this stock going to turn around, or is the move justified?
+  const prompt = `You are a spread-betting AI. A stock just made a significant single-day move (5%+). We need to decide: is this stock going to turn around, or is the move justified?
 
 STOCK: ${quote.symbol} (${quote.name})
 MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% today (price: $${quote.price.toFixed(2)})
