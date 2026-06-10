@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { StockQuote, TradeReview } from "@/lib/types";
 import { TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
+import { useIGStream } from "@/lib/useIGStream";
 
 interface IGAccount {
   accountId: string;
@@ -68,6 +69,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Dashboard() {
+  const { prices: streamPrices, connected: streamConnected, error: streamError } = useIGStream();
   const [quotes, setQuotes] = useState<StockQuote[]>([]);
   const [igAccount, setIgAccount] = useState<IGAccount | null>(null);
   const [igPositions, setIgPositions] = useState<IGPosition[]>([]);
@@ -80,6 +82,7 @@ export default function Dashboard() {
   const [lastScan, setLastScan] = useState<string | null>(null);
   const [tab, setTab] = useState<"live" | "positions" | "patterns" | "reviews">("live");
   const [errors, setErrors] = useState<string[]>([]);
+  const [closingDealId, setClosingDealId] = useState<string | null>(null);
   const recordedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -139,15 +142,17 @@ export default function Dashboard() {
       const triggered: string[] = data.triggered ?? [];
       if (triggered.length > 0) addLog(`Triggered: ${triggered.join(", ")}`);
 
-      for (const symbol of triggered) {
-        const quote = q.find(x => x.symbol === symbol);
-        if (quote) recordMovement(quote);
-      }
+      if (data.marketOpen) {
+        for (const symbol of triggered) {
+          const quote = q.find(x => x.symbol === symbol);
+          if (quote) recordMovement(quote);
+        }
 
-      // Also record any stock moving > 5% even if below trigger threshold
-      for (const quote of q) {
-        if (Math.abs(quote.changePercent) >= 5 && !triggered.includes(quote.symbol)) {
-          recordMovement(quote);
+        // Also record any stock moving > 5% even if below trigger threshold
+        for (const quote of q) {
+          if (Math.abs(quote.changePercent) >= 5 && !triggered.includes(quote.symbol)) {
+            recordMovement(quote);
+          }
         }
       }
 
@@ -166,7 +171,7 @@ export default function Dashboard() {
       // Log close actions
       const closeActions = data.closes ?? [];
       for (const c of closeActions) {
-        const label = c.reason === "take_profit" ? "+1% TAKE PROFIT" : "-2% STOP LOSS";
+        const label = c.reason === "take_profit" ? "+4% TAKE PROFIT" : c.reason === "stop_loss" ? "-2% STOP LOSS" : "24H TIME STOP";
         if (c.success) {
           addLog(`CLOSED ${c.symbol} ${label} (${c.pnlPercent > 0 ? "+" : ""}${c.pnlPercent.toFixed(2)}%)`);
         } else {
@@ -185,11 +190,129 @@ export default function Dashboard() {
     }
   }, [addLog, recordMovement]);
 
+  const closePosition = useCallback(async (pos: IGPosition) => {
+    setClosingDealId(pos.dealId);
+    try {
+      const res = await fetch("/api/close-position", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dealId: pos.dealId, direction: pos.direction, size: pos.size }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addLog(`Manually closed ${pos.instrumentName} (${pos.dealId})`);
+        setIgPositions(prev => prev.filter(p => p.dealId !== pos.dealId));
+      } else {
+        addLog(`Close failed: ${data.reason ?? "unknown error"}`);
+      }
+    } catch (err) {
+      addLog(`Close error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setClosingDealId(null);
+    }
+  }, [addLog]);
+
+  const [nextOpen, setNextOpen] = useState<string | null>(null);
+
   useEffect(() => {
-    scan();
-    const id = setInterval(scan, 180_000);
-    return () => clearInterval(id);
-  }, [scan]);
+    // Returns ms until next NYSE open (9:30 AM ET), accounting for DST
+    function msUntilNextOpen(): number {
+      const now = new Date();
+      // ET offset: UTC-5 (EST) or UTC-4 (EDT)
+      // EDT runs second Sunday March → first Sunday November
+      function etOffset(d: Date): number {
+        const year = d.getUTCFullYear();
+        const dstStart = new Date(Date.UTC(year, 2, 8)); // March 8 (latest possible 2nd Sunday)
+        dstStart.setUTCDate(8 + (7 - dstStart.getUTCDay()) % 7); // 2nd Sunday
+        const dstEnd = new Date(Date.UTC(year, 10, 1)); // Nov 1
+        dstEnd.setUTCDate(1 + (7 - dstEnd.getUTCDay()) % 7); // 1st Sunday
+        return d >= dstStart && d < dstEnd ? -4 : -5;
+      }
+      const offsetHours = etOffset(now);
+      const etNow = new Date(now.getTime() + offsetHours * 3_600_000);
+      const day = etNow.getUTCDay(); // 0=Sun, 6=Sat
+      const h = etNow.getUTCHours(), m = etNow.getUTCMinutes();
+      const minsSinceMidnight = h * 60 + m;
+      const openMins = 9 * 60 + 30;
+      const closeMins = 16 * 60;
+
+      // If market is currently open, no wait needed
+      if (day >= 1 && day <= 5 && minsSinceMidnight >= openMins && minsSinceMidnight < closeMins) return 0;
+
+      // Find next weekday 9:30 AM ET
+      let daysAhead = 0;
+      let candidate = new Date(etNow);
+      // If today is a weekday but before open, open is today
+      if (day >= 1 && day <= 5 && minsSinceMidnight < openMins) {
+        daysAhead = 0;
+      } else {
+        // Move to next day
+        daysAhead = 1;
+        candidate = new Date(etNow.getTime() + 86_400_000);
+        // Skip weekend
+        while (candidate.getUTCDay() === 0 || candidate.getUTCDay() === 6) {
+          daysAhead++;
+          candidate = new Date(etNow.getTime() + daysAhead * 86_400_000);
+        }
+      }
+      const nextOpenET = new Date(Date.UTC(
+        candidate.getUTCFullYear(), candidate.getUTCMonth(), candidate.getUTCDate(),
+        9, 30, 0
+      ));
+      // Convert back to UTC
+      const nextOpenUTC = new Date(nextOpenET.getTime() - offsetHours * 3_600_000);
+      return Math.max(0, nextOpenUTC.getTime() - now.getTime());
+    }
+
+    let scanInterval: ReturnType<typeof setInterval> | null = null;
+    let wakeTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    function startScanning() {
+      scan();
+      scanInterval = setInterval(scan, 180_000);
+      setNextOpen(null);
+    }
+
+    function scheduleWakeup() {
+      const ms = msUntilNextOpen();
+      if (ms === 0) {
+        startScanning();
+        return;
+      }
+      const opensAt = new Date(Date.now() + ms);
+      setNextOpen(opensAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZoneName: "short" }));
+      addLog(`Market closed. Sleeping until ${opensAt.toLocaleTimeString("en-GB")} (${Math.round(ms / 60_000)}min)`);
+      wakeTimeout = setTimeout(() => {
+        addLog("NYSE opening — starting scans");
+        startScanning();
+      }, ms);
+    }
+
+    // Do one scan to get initial state, then decide whether to keep scanning or sleep
+    scan().then(() => {
+      setMarketOpen(prev => {
+        if (!prev) scheduleWakeup();
+        else {
+          scanInterval = setInterval(scan, 180_000);
+        }
+        return prev;
+      });
+    });
+
+    return () => {
+      if (scanInterval) clearInterval(scanInterval);
+      if (wakeTimeout) clearTimeout(wakeTimeout);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Merge real-time stream prices over the scan-fetched quotes
+  const liveQuotes = quotes.map(q => {
+    const stream = streamPrices[q.symbol];
+    if (!stream || (stream.bid === 0 && stream.offer === 0)) return q;
+    const midPrice = (stream.bid + stream.offer) / 2;
+    return { ...q, price: midPrice, changePercent: stream.changePercent, high: stream.high, low: stream.low };
+  });
 
   const totalOpenPnl = igPositions.reduce((s, p) => s + p.profitLoss, 0);
 
@@ -211,7 +334,10 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${marketOpen ? "bg-emerald-500/20 text-emerald-400" : "bg-white/10 text-white/30"}`}>
-            {marketOpen ? "NYSE Open" : "NYSE Closed"}
+            {marketOpen ? "NYSE Open" : nextOpen ? `Sleeping — opens ${nextOpen}` : "NYSE Closed"}
+          </span>
+          <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${streamConnected ? "bg-blue-500/20 text-blue-400" : "bg-white/10 text-white/30"}`}>
+            {streamConnected ? "Live" : "Connecting..."}
           </span>
           {scanning && <div className="w-3 h-3 border-2 border-white/20 border-t-emerald-400 rounded-full animate-spin" />}
           <button onClick={scan} disabled={scanning}
@@ -260,7 +386,7 @@ export default function Dashboard() {
               <div>
                 <p className="text-[10px] text-white/40 uppercase tracking-widest mb-1">Last Scan</p>
                 <p className="text-lg font-mono text-white/60">{lastScan ?? "—"}</p>
-                <p className="text-[10px] text-white/20">every 3 min</p>
+                <p className="text-[10px] text-white/20">{marketOpen ? "every 3 min" : nextOpen ? "sleeping" : "market closed"}</p>
               </div>
             </div>
           ) : (
@@ -276,9 +402,10 @@ export default function Dashboard() {
             </div>
           )}
         </div>
-        {errors.length > 0 && (
+        {(errors.length > 0 || streamError) && (
           <div className="mt-2 rounded-xl border border-red-500/30 bg-red-500/5 p-3">
             <p className="text-[10px] text-red-400 uppercase tracking-widest mb-1">Errors</p>
+            {streamError && <p className="text-xs text-red-400/70">Stream: {streamError}</p>}
             {errors.map((e, i) => <p key={i} className="text-xs text-red-400/70">{e}</p>)}
           </div>
         )}
@@ -314,7 +441,7 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {quotes.map(q => {
+                  {liveQuotes.map(q => {
                     const up = q.changePercent >= 0;
                     const trig = Math.abs(q.changePercent) >= TRIGGER_PCT;
                     const notable = Math.abs(q.changePercent) >= 3;
@@ -391,10 +518,17 @@ export default function Dashboard() {
                         </p>
                         <p className="text-[10px] text-white/20 mt-0.5">Deal: {p.dealId} | {p.currency}</p>
                       </div>
-                      <div className="text-right shrink-0">
+                      <div className="text-right shrink-0 flex flex-col items-end gap-2">
                         <p className={`text-2xl font-bold font-mono ${p.profitLoss >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                           {p.profitLoss >= 0 ? "+" : ""}£{p.profitLoss.toFixed(2)}
                         </p>
+                        <button
+                          onClick={() => closePosition(p)}
+                          disabled={closingDealId !== null}
+                          className="text-[11px] font-semibold px-3 py-1 rounded-lg border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
+                        >
+                          {closingDealId === p.dealId ? "Closing..." : "Close"}
+                        </button>
                       </div>
                     </div>
                   </div>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { igLogin, igGetAccount, igGetPositions, igOpenPosition, igClosePosition } from "@/lib/ig-client";
-import { TRACKED_STOCKS, TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT, STAKE_PER_POINT } from "@/lib/stocks";
+import { TRACKED_STOCKS, TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT, TIME_STOP_HOURS, STAKE_PER_POINT } from "@/lib/stocks";
 import { gatherIntelligence } from "@/lib/intelligence";
 import Anthropic from "@anthropic-ai/sdk";
 import type { StockQuote } from "@/lib/types";
@@ -13,6 +13,9 @@ const IG_DEMO_URL = "https://demo-api.ig.com/gateway/deal";
 // Track which stocks we already traded today (survives within same serverless instance)
 const tradedToday = new Set<string>();
 let lastTradedDate = "";
+
+// Track when each position was opened (dealId → timestamp ms)
+const positionOpenedAt = new Map<string, number>();
 
 function resetIfNewDay() {
   const today = new Date().toISOString().slice(0, 10);
@@ -83,7 +86,7 @@ YOUR JOB: Analyse the news and context. Decide if this 7%+ move is an OVERREACTI
 - If UP 7%+ and you think it will PULL BACK → SELL
 - If the move is justified (real earnings shock, regulatory action, bankruptcy risk, genuine paradigm shift) → AVOID
 
-We take profit at +1% and stop loss at -4%. So we only need a small reversal to win, but we lose big if wrong. Only trade when you're genuinely confident the move is overdone.
+We take profit at +4% and stop loss at -2%, with a 24h time stop. We need a meaningful reversal to win, but our losses are capped small. Only trade when you're genuinely confident the move is overdone and will reverse meaningfully.
 
 Respond with ONLY this JSON:
 {
@@ -122,7 +125,7 @@ interface TradeAction {
 interface CloseAction {
   symbol: string;
   dealId: string;
-  reason: "take_profit" | "stop_loss";
+  reason: "take_profit" | "stop_loss" | "time_stop";
   pnlPercent: number;
   success: boolean;
   error?: string;
@@ -196,13 +199,18 @@ export async function GET() {
         ? ((currentPrice - entryPrice) / entryPrice) * 100
         : ((entryPrice - currentPrice) / entryPrice) * 100;
 
-      let closeReason: "take_profit" | "stop_loss" | null = null;
+      const openedAt = positionOpenedAt.get(pos.dealId);
+      const ageHours = openedAt ? (Date.now() - openedAt) / 3_600_000 : null;
+
+      let closeReason: "take_profit" | "stop_loss" | "time_stop" | null = null;
       if (pnlPct >= TAKE_PROFIT_PCT) closeReason = "take_profit";
-      if (pnlPct <= -STOP_LOSS_PCT) closeReason = "stop_loss";
+      else if (pnlPct <= -STOP_LOSS_PCT) closeReason = "stop_loss";
+      else if (ageHours !== null && ageHours >= TIME_STOP_HOURS) closeReason = "time_stop";
 
       if (closeReason) {
         try {
           const result = await igClosePosition(pos.dealId, pos.direction as "BUY" | "SELL", pos.size);
+          if (result.success) positionOpenedAt.delete(pos.dealId);
           closes.push({
             symbol: quote.symbol,
             dealId: pos.dealId,
@@ -224,7 +232,19 @@ export async function GET() {
       }
     }
 
-    // 6. OPEN NEW POSITIONS for triggered stocks
+    // 6. OPEN NEW POSITIONS for triggered stocks (only when market is open)
+    if (!marketOpen) return NextResponse.json({
+      quotes,
+      triggered: [],
+      trades: [],
+      closes,
+      marketOpen,
+      scannedAt: new Date().toISOString(),
+      igAccount: account,
+      igPositions,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+
     for (const quote of triggered) {
       const stock = TRACKED_STOCKS.find(s => s.symbol === quote.symbol);
       if (!stock) continue;
@@ -235,16 +255,23 @@ export async function GET() {
       // Skip if we already have an open position on this stock
       if (igPositions.some(p => p.epic === stock.igEpic)) continue;
 
-      // Gather intelligence and ask AI
-      let briefing = "";
-      try {
-        const intel = await gatherIntelligence(quote);
-        briefing = intel.briefing;
-      } catch {
-        briefing = "Intelligence gathering failed.";
+      // Only use AI if IG is actually connected (saves tokens when running without IG)
+      let decision: { direction: "BUY" | "SELL" | "AVOID"; reasoning: string; confidence: number };
+      if (!account) {
+        // No IG connection — skip AI entirely, use mechanical fade
+        const dir = quote.changePercent > 0 ? "SELL" as const : "BUY" as const;
+        decision = { direction: dir, reasoning: "AI skipped (no IG connection), mechanical fade", confidence: 3 };
+      } else {
+        // IG connected — gather intelligence and ask AI
+        let briefing = "";
+        try {
+          const intel = await gatherIntelligence(quote);
+          briefing = intel.briefing;
+        } catch {
+          briefing = "Intelligence gathering failed.";
+        }
+        decision = await aiDecide(quote, briefing);
       }
-
-      const decision = await aiDecide(quote, briefing);
 
       if (decision.direction === "AVOID") {
         trades.push({
@@ -267,6 +294,7 @@ export async function GET() {
           expiry: "-", // Cash/24-hour markets use "-" not "DFB"
         });
 
+        if (result.dealId) positionOpenedAt.set(result.dealId, Date.now());
         trades.push({
           symbol: quote.symbol,
           epic: stock.igEpic,

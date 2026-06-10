@@ -11,6 +11,7 @@ interface IGSession {
   securityToken: string; // X-SECURITY-TOKEN
   accountId: string;
   expiresAt: number;     // timestamp
+  lightstreamerEndpoint: string;
 }
 
 let cachedSession: IGSession | null = null;
@@ -69,6 +70,7 @@ export async function igLogin(): Promise<IGSession> {
     securityToken,
     accountId: data.currentAccountId ?? targetAccountId,
     expiresAt: Date.now() + 5 * 60 * 60 * 1000, // 5 hours
+    lightstreamerEndpoint: data.lightstreamerEndpoint ?? "https://apd.marketdatasystems.com",
   };
 
   // Switch to the spread betting account if not already on it

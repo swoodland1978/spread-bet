@@ -49,8 +49,9 @@ export const TRACKED_STOCKS: TrackedStock[] = [
 export const SYMBOLS = TRACKED_STOCKS.map(s => s.symbol);
 
 export const TRIGGER_PCT = 7;      // % single-day move that triggers intelligence gathering + AI decision
-export const TAKE_PROFIT_PCT = 1;  // % gain to auto-close (quick scalp, lock in the win)
-export const STOP_LOSS_PCT = 4;    // % loss to auto-close (4:1 risk:reward, need 80% win rate)
+export const TAKE_PROFIT_PCT = 4;  // % gain to auto-close
+export const STOP_LOSS_PCT = 2;    // % loss to auto-close (2:1 reward:risk, break even at 33% win rate)
+export const TIME_STOP_HOURS = 24; // close position after this many hours regardless of P&L
 export const STARTING_BANKROLL = 10_000; // £
 export const STAKE_PER_POINT = 1;  // £ per point default stake
 
@@ -63,6 +64,6 @@ export const STAKE_PER_POINT = 1;  // £ per point default stake
  * 4. Claude Haiku decides: is this stock going to turn around or not?
  * 5. BUY (if down 7%+ and AI thinks bounce) / SELL (if up 7%+ and AI thinks pullback) / AVOID
  * 6. If not AVOID → igOpenPosition() places real spread bet on IG demo
- * 7. Each scan: check open positions → close at +1% TP or -4% SL
+ * 7. Each scan: check open positions → close at +4% TP, -2% SL, or after 24h time stop
  * 8. AI reviews every closed trade → builds playbook for future decisions
  */

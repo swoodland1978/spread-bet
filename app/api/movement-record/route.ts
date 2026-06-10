@@ -6,11 +6,30 @@ import type { StockQuote } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
+// Server-side dedup: only record one movement per stock per day (saves AI tokens)
+const recordedToday = new Set<string>();
+let recordedDate = "";
+
+function resetRecordedIfNewDay() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== recordedDate) {
+    recordedToday.clear();
+    recordedDate = today;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const { quote } = (await req.json()) as { quote: StockQuote };
   if (!quote?.symbol) {
     return NextResponse.json({ error: "Missing quote" }, { status: 400 });
   }
+
+  resetRecordedIfNewDay();
+  const dayKey = `${quote.symbol}-${new Date().toISOString().slice(0, 10)}`;
+  if (recordedToday.has(dayKey)) {
+    return NextResponse.json({ error: "Already recorded today", deduplicated: true }, { status: 200 });
+  }
+  recordedToday.add(dayKey);
 
   let briefing = "";
   try {
