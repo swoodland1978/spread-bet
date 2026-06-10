@@ -543,8 +543,11 @@ export default function Dashboard() {
                 </div>
               </div>
             ) : (
-              <p className="text-white/30 text-sm text-center py-12">No open positions on IG. Trades fire automatically when stocks move &gt;{TRIGGER_PCT}%.</p>
+              <p className="text-white/30 text-sm text-center py-8">No open positions on IG. Trades fire automatically when stocks move &gt;{TRIGGER_PCT}%.</p>
             )}
+
+            {/* Test trade panel */}
+            <TestTradePanel onTradeComplete={() => { scan(); setTab("positions"); }} addLog={addLog} />
           </div>
         )}
 
@@ -654,6 +657,67 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function TestTradePanel({ onTradeComplete, addLog }: { onTradeComplete: () => void; addLog: (msg: string) => void }) {
+  const [symbol, setSymbol] = useState("GOOGL");
+  const [direction, setDirection] = useState<"BUY" | "SELL">("SELL");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function placeTrade() {
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/test-trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, direction }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setResult(`✓ ${direction} ${symbol} placed — deal: ${data.dealId ?? "pending"}`);
+        addLog(`TEST TRADE: ${direction} ${symbol} (deal: ${data.dealId})`);
+        onTradeComplete();
+      } else {
+        setResult(`✗ Failed: ${data.error}`);
+      }
+    } catch (err) {
+      setResult(`✗ Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 mt-4">
+      <p className="text-[10px] text-yellow-400/70 uppercase tracking-widest mb-3">Test Trade (Demo Only)</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <select
+          value={symbol}
+          onChange={e => setSymbol(e.target.value)}
+          className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
+        >
+          {["TSLA","NVDA","AMD","META","AAPL","MSFT","AMZN","GOOGL","NFLX","PLTR","COIN","RIVN","MSTR","ARM","SMCI","ABNB","ZM","BABA","MARA","RIOT","AVGO"].map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <button onClick={() => setDirection("BUY")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${direction === "BUY" ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400" : "border-white/10 text-white/40 hover:text-white/70"}`}>
+          BUY
+        </button>
+        <button onClick={() => setDirection("SELL")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${direction === "SELL" ? "bg-red-500/20 border-red-500/40 text-red-400" : "border-white/10 text-white/40 hover:text-white/70"}`}>
+          SELL
+        </button>
+        <button onClick={placeTrade} disabled={loading}
+          className="px-4 py-1.5 rounded-lg text-xs font-bold bg-yellow-500/20 border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-40">
+          {loading ? "Placing..." : "Place Test Trade"}
+        </button>
+      </div>
+      {result && <p className={`text-xs mt-2 font-mono ${result.startsWith("✓") ? "text-emerald-400" : "text-red-400"}`}>{result}</p>}
     </div>
   );
 }
