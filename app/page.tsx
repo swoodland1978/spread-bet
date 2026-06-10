@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { StockQuote, TradeReview } from "@/lib/types";
 import { TRIGGER_PCT, TAKE_PROFIT_PCT, STOP_LOSS_PCT } from "@/lib/stocks";
-import type { StreamPriceMap } from "@/lib/useIGStream";
 
 interface IGAccount {
   accountId: string;
@@ -69,7 +68,6 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Dashboard() {
-  const streamPrices: StreamPriceMap = {};
   const streamConnected = false;
   const streamError: string | null = null;
   const [quotes, setQuotes] = useState<StockQuote[]>([]);
@@ -308,13 +306,7 @@ export default function Dashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Merge real-time stream prices over the scan-fetched quotes
-  const liveQuotes = quotes.map(q => {
-    const stream = streamPrices[q.symbol];
-    if (!stream || (stream.bid === 0 && stream.offer === 0)) return q;
-    const midPrice = (stream.bid + stream.offer) / 2;
-    return { ...q, price: midPrice, changePercent: stream.changePercent, high: stream.high, low: stream.low };
-  });
+  const liveQuotes = quotes;
 
   const totalOpenPnl = igPositions.reduce((s, p) => s + p.profitLoss, 0);
 
