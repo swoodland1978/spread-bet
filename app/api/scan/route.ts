@@ -63,35 +63,80 @@ async function fetchIGPrice(epic: string, session: { cst: string; securityToken:
   }
 }
 
+interface TechnicalContext {
+  atrPct: number;        // day range as % of price — proxy for daily ATR
+  zScore: number;        // how many ATRs the move represents
+  moveVsRange: number;   // move as % of day's high-low range (0-1)
+  spread: number;        // current spread in points
+  spreadBaseline: number; // normal spread from stock config
+  spreadMultiple: number; // how wide the spread is vs normal
+}
+
+function buildTechnicalContext(
+  quote: StockQuote & { bid: number; offer: number },
+  igSpread: number
+): TechnicalContext {
+  const mid = quote.price;
+  const dayRange = quote.high - quote.low;
+  const atrPct = mid > 0 ? (dayRange / mid) * 100 : 0;
+  // Z-score: how many ATR units is this move?
+  const zScore = atrPct > 0 ? Math.abs(quote.changePercent) / atrPct : 0;
+  // How much of the day's range does the move represent?
+  const moveVsRange = dayRange > 0 ? Math.abs(quote.changePercent) / atrPct : 0;
+  const spread = quote.offer - quote.bid;
+  const spreadMultiple = igSpread > 0 ? spread / igSpread : 1;
+
+  return { atrPct, zScore, moveVsRange, spread, spreadBaseline: igSpread, spreadMultiple };
+}
+
 /** Ask Claude Haiku whether to trade */
-async function aiDecide(quote: StockQuote, briefing: string): Promise<{ direction: "BUY" | "SELL" | "AVOID"; reasoning: string; confidence: number }> {
+async function aiDecide(
+  quote: StockQuote & { bid: number; offer: number },
+  briefing: string,
+  tech: TechnicalContext
+): Promise<{ direction: "BUY" | "SELL" | "AVOID"; reasoning: string; confidence: number }> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    // Fallback: mechanical fade
     const dir = quote.changePercent > 0 ? "SELL" : "BUY";
     return { direction: dir, reasoning: `Mechanical fade: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(1)}% move`, confidence: 5 };
   }
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const prompt = `You are a spread-betting AI. A stock just made a significant single-day move (5%+). We need to decide: is this stock going to turn around, or is the move justified?
 
-STOCK: ${quote.symbol} (${quote.name})
-MOVE: ${quote.changePercent > 0 ? "+" : ""}${quote.changePercent.toFixed(2)}% today (price: $${quote.price.toFixed(2)})
+  // Structured payload — forces AI to reason analytically, not emotionally
+  const payload = {
+    ticker: quote.symbol,
+    name: quote.name,
+    price_move_pct: quote.changePercent.toFixed(2),
+    direction: quote.changePercent > 0 ? "UP" : "DOWN",
+    current_price: quote.price.toFixed(2),
+    day_range_pct: tech.atrPct.toFixed(2),
+    z_score: tech.zScore.toFixed(2),
+    spread_multiple: `${tech.spreadMultiple.toFixed(1)}x normal`,
+    matching_news_headlines: briefing,
+  };
 
-MARKET INTELLIGENCE:
-${briefing}
+  const prompt = `You are a quantitative spread-betting AI. Evaluate whether this price move is a LIQUIDITY EVENT (temporary overreaction that will mean-revert) or a FUNDAMENTAL EVENT (justified repricing that will continue).
 
-YOUR JOB: Analyse the news and context. Decide if this 7%+ move is an OVERREACTION that will reverse, or a JUSTIFIED move that will continue.
+TRADE DATA:
+${JSON.stringify(payload, null, 2)}
 
-- If DOWN 7%+ and you think it will BOUNCE BACK → BUY
-- If UP 7%+ and you think it will PULL BACK → SELL
-- If the move is justified (real earnings shock, regulatory action, bankruptcy risk, genuine paradigm shift) → AVOID
+CLASSIFICATION GUIDE:
+- LIQUIDITY EVENT (trade the reversal): Heavy volume flush, no concrete news, technical stop-hunt, sector sympathy move, market-wide risk-off with no stock-specific catalyst. Z-score > 2 suggests anomalous move for this stock.
+- FUNDAMENTAL EVENT (avoid): Earnings miss/beat, FDA decision, regulatory action, CEO departure, short seller report, bankruptcy risk, genuine paradigm shift. The asset is repricing permanently.
 
-We take profit at +4% and stop loss at -2%, with a 24h time stop. We need a meaningful reversal to win, but our losses are capped small. Only trade when you're genuinely confident the move is overdone and will reverse meaningfully.
+DECISION RULES:
+- If LIQUIDITY EVENT and move is DOWN → BUY (fade the drop, expect bounce)
+- If LIQUIDITY EVENT and move is UP → SELL (fade the rally, expect pullback)
+- If FUNDAMENTAL EVENT → AVOID regardless of direction
+- If Z-score < 1.5, the move is within normal daily noise → AVOID
+- If spread_multiple > 3x, execution cost is too high → AVOID
+
+We take profit at +4% and stop loss at -2% with a 24h time stop.
 
 Respond with ONLY this JSON:
 {
   "direction": "BUY" or "SELL" or "AVOID",
-  "reasoning": "1-2 sentences: why will this stock turn around, or why is the move justified?",
+  "reasoning": "1-2 sentences: liquidity or fundamental event, and why it will/won't revert",
   "confidence": 1-10
 }`;
 
@@ -105,7 +150,6 @@ Respond with ONLY this JSON:
       .replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
     return JSON.parse(text);
   } catch {
-    // Fallback: mechanical fade
     const dir = quote.changePercent > 0 ? "SELL" : "BUY";
     return { direction: dir, reasoning: "AI unavailable, mechanical fade", confidence: 3 };
   }
@@ -183,8 +227,17 @@ export async function GET() {
     const account = await igGetAccount();
     const igPositions = await igGetPositions();
 
-    // 4. Find triggered stocks (5%+ move)
-    const triggered = quotes.filter(q => Math.abs(q.changePercent) >= TRIGGER_PCT);
+    // 4. Find triggered stocks — dynamic threshold: move must be >= TRIGGER_PCT AND >= 1.5x the day's ATR
+    const triggered = quotes.filter(q => {
+      if (Math.abs(q.changePercent) < TRIGGER_PCT) return false;
+      const stock = TRACKED_STOCKS.find(s => s.symbol === q.symbol);
+      const tech = buildTechnicalContext(q as StockQuote & { bid: number; offer: number }, stock?.igSpread ?? 0.25);
+      // Reject if the move is within normal daily noise (Z < 1.5)
+      if (tech.zScore < 1.5) return false;
+      // Reject if spread is more than 3x normal (too expensive to enter)
+      if (tech.spreadMultiple > 3) return false;
+      return true;
+    });
 
     // 5. CHECK OPEN POSITIONS — auto-close at TP/SL
     for (const pos of igPositions) {
@@ -270,7 +323,8 @@ export async function GET() {
         } catch {
           briefing = "Intelligence gathering failed.";
         }
-        decision = await aiDecide(quote, briefing);
+        const tech = buildTechnicalContext(quote as StockQuote & { bid: number; offer: number }, stock.igSpread);
+        decision = await aiDecide(quote as StockQuote & { bid: number; offer: number }, briefing, tech);
       }
 
       if (decision.direction === "AVOID") {
